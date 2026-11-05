@@ -1,7 +1,30 @@
+# תלויות ובנייה
 node_modules/
 dist/
-out/
-*.zip
+
+# נתוני בחינות ושאלות: אסור להעלות למאגר ציבורי
 samples/
+*.zip
+out/
+*.docx
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.json.bak
+
+# סודות וקובצי סביבה
 .env
 .env.*
+.dev.vars
+*.pem
+*.key
+serviceAccount*.json
+firebase-debug.log
+.firebase/
+.wrangler/
+
+# מקומי
+.claude/settings.local.json
+*.log
+.DS_Store

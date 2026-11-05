@@ -318,4 +318,12 @@ async function exportDoc(mode) {
 
 await loadAll();
 render();
+// פיתוח בלבד: מאגר ריק -> טעינה אוטומטית של חבילות הדוגמה, כדי שהאתר ייפתח עם נתונים
+if (import.meta.env.DEV && !S.packages.length) {
+  try {
+    const names = await (await fetch('/__samples/')).json(); const files = [];
+    for (const n of names) files.push(new File([await (await fetch('/__samples/' + encodeURIComponent(n))).arrayBuffer()], n));
+    if (files.length) { await importFiles(files); S.tab = 'bank'; render(); toast(`נטענו ${S.questions.length} שאלות מחבילות הדוגמה`); }
+  } catch { /* אין samples */ }
+}
 window.__app = { S, importFiles, render };

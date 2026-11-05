@@ -5,7 +5,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node scripts/test-adapter.mjs"
+    "test": "node scripts/test-adapter.mjs samples && node scripts/test-safety.mjs"
   },
   "type": "module",
   "dependencies": {

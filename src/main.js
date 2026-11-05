@@ -1,8 +1,11 @@
 import { parsePackage, KIND_LABEL } from './adapter.js';
 import { cellLines } from './clean.js';
-import * as db from './db.js';
-import { newExam, addQuestion, totalPoints, removeItem, moveItem, equalSplit, isChoiceQuestion, caseFirstUse } from './exam.js';
+import { store } from './store.js';
+import { newExam, uid, addQuestion, totalPoints, removeItem, moveItem, equalSplit, isChoiceQuestion, caseFirstUse } from './exam.js';
 import { buildExamDocument, toBlob } from './docx-export.js';
+import { prepareImage } from './images.js';
+
+const ANATOMY_TOOL_URL = 'https://urony.github.io/Anatomic-Pictures-Finder-tool/';
 
 // ---------- מצב ----------
 const S = {
@@ -21,11 +24,10 @@ function toast(msg) { const t = document.getElementById('toast'); t.textContent 
 
 // ---------- טעינה ----------
 async function loadAll() {
-  S.packages = await db.getAll('packages');
-  S.questions = await db.getAll('questions');
-  S.cases = new Map((await db.getAll('cases')).map(c => [c.uid, c]));
-  S.media = new Map((await db.getAll('media')).map(m => [m.key, m.data]));
-  S.exams = (await db.getAll('exams')).sort((a, b) => b.updatedAt - a.updatedAt);
+  const bank = await store.loadBank();
+  S.packages = bank.packages; S.questions = bank.questions; S.media = bank.media;
+  S.cases = new Map(bank.cases.map(c => [c.uid, c]));
+  S.exams = await store.loadExams();
   S.tax = { types: {}, domains: {} };
   for (const p of S.packages) { Object.assign(S.tax.types, p.taxonomy.types); Object.assign(S.tax.domains, p.taxonomy.domains); }
   if (!S.exam) S.exam = S.exams[0] || newExam();
@@ -43,8 +45,8 @@ function saveExamSoon() {
   clearTimeout(saveTimer);
   const ind = document.getElementById('saveind'); if (ind) ind.textContent = 'שומר…';
   saveTimer = setTimeout(async () => {
-    await db.put('exams', JSON.parse(JSON.stringify(S.exam)));
-    S.exams = (await db.getAll('exams')).sort((a, b) => b.updatedAt - a.updatedAt);
+    await store.saveExam(S.exam);
+    S.exams = await store.loadExams();
     const i2 = document.getElementById('saveind'); if (i2) i2.textContent = 'נשמר ✓';
   }, 350);
 }
@@ -157,14 +159,11 @@ function bankView() {
 function detailHtml(q) {
   const cs = q.caseStudyId && S.cases.get(q.caseStudyId);
   const inExam = S.exam.items.filter(i => i.snap.uid === q.uid).length;
-  const refs = q.blocks.filter(b => b.type === 'image' && b.reference);
   return `<div><button class="btn primary" data-add="${esc(q.uid)}">הוסף למבחן</button> ${inExam ? `<span class="badge ok">כבר במבחן ×${inExam}</span>` : ''}</div>
-    <div style="margin:8px 0">${badgesOf(q)}${q.points != null ? `<span class="badge">${q.points} נק׳ במקור</span>` : ''}<span class="badge">${q.reviewStatus === 'approved' ? 'מאושר' : esc(q.reviewStatus || '')}</span></div>
+    <div style="margin:8px 0">${badgesOf(q)}${q.points != null ? `<span class="badge">${q.points} נק׳ במקור</span>` : ''}</div>
     ${cs ? `<div class="casebox"><h4>סיפור מקרה (משותף ל-${cs.questionIds.length} שאלות)</h4>${blocksHtml(cs.blocks)}</div>` : ''}
     <div class="qbody">${blocksHtml(q.blocks)}</div>
-    ${rubricHtml(q.rubric)}
-    ${q.corrections.length ? `<details style="margin-top:10px"><summary>תוקנו ${q.corrections.length} שיבושי חילוץ (הנוסח המקורי נשמר)</summary>${q.corrections.map(c => `<div class="corr"><del>${esc(c.from)}</del><br><ins>${esc(c.to)}</ins></div>`).join('<hr>')}</details>` : ''}
-    ${refs.length ? `<details><summary>תמונת מקור של הטבלה (לבקרה)</summary>${refs.map(b => `<img src="${mediaUrl(b.mediaKey)}" style="max-width:100%">`).join('')}</details>` : ''}`;
+    ${rubricHtml(q.rubric)}`;
 }
 
 function examView() {
@@ -212,8 +211,31 @@ function itemHtml(it, i, first) {
         <button class="btn sm" data-edit="${it.id}">${editing ? 'סיום עריכה' : 'ערוך עותק'}</button>
         <button class="btn sm danger" data-rm="${it.id}">מחק</button>
       </span></div>
+    ${imagesPanelHtml(it)}
     ${it.edited ? '<div class="editnote">השאלה נערכה. מומלץ לבדוק אם יש צורך לעדכן את הניקוד</div>' : ''}
-    ${editing ? editorHtml(it) : `<div class="qbody">${blocksHtml(it.snap.blocks)}</div>`}
+    ${editing ? editorHtml(it) : previewHtml(it)}
+  </div>`;
+}
+function previewHtml(it) {
+  const imgs = it.images || [];
+  const pic = im => `<img src="${mediaUrl(im.key)}" alt="${esc(im.name)}" style="width:${Math.min(100, im.widthCm / 17 * 100)}%">`;
+  const above = imgs.filter(i => i.position === 'above').map(pic).join('');
+  const below = imgs.filter(i => i.position === 'below').map(pic).join('');
+  const side = imgs.filter(i => i.position === 'side').map(i => `<img src="${mediaUrl(i.key)}" alt="${esc(i.name)}">`).join('');
+  const body = `<div class="qbody">${blocksHtml(it.snap.blocks)}</div>`;
+  return side ? `${above}<div class="sidewrap">${body}<div class="sideimg">${side}</div></div>${below}` : `${above}${body}${below}`;
+}
+function imagesPanelHtml(it) {
+  const imgs = it.images || [];
+  return `<div class="imgpanel">
+    <label class="btn sm">+ הוסף תמונה מהמחשב<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-upimg="${it.id}" hidden></label>
+    <a class="btn sm" href="${ANATOMY_TOOL_URL}" target="_blank" rel="noopener">פתח את כלי האיורים האנטומיים ↗</a>
+    <span class="hint">שמרו את האיור במחשב וחזרו להעלות אותו כאן</span>
+    ${imgs.map(im => `<div class="uimg"><img src="${mediaUrl(im.key)}" alt="${esc(im.name)}">
+      <div><div class="s">${esc(im.name)}</div>
+      <label>רוחב (ס״מ) <input type="number" min="2" max="17" step="0.5" data-imgw="${it.id}:${im.id}" value="${im.widthCm}"></label>
+      <label>מיקום <select data-imgpos="${it.id}:${im.id}"><option value="above" ${im.position === 'above' ? 'selected' : ''}>מעל השאלה</option><option value="below" ${im.position === 'below' ? 'selected' : ''}>מתחת לשאלה</option><option value="side" ${im.position === 'side' ? 'selected' : ''}>לצד השאלה</option></select></label>
+      <button class="btn sm danger" data-rmimg="${it.id}:${im.id}">הסר</button></div></div>`).join('')}
   </div>`;
 }
 function editorHtml(it) {
@@ -221,7 +243,8 @@ function editorHtml(it) {
     const del = `<button class="btn sm danger" data-delblk="${it.id}:${bi}" title="מחק רכיב">✕</button>`;
     if (b.type === 'text' || b.type === 'caption') return `<div class="blkedit"><textarea data-blk="${it.id}:${bi}">${esc(b.text)}</textarea>${del}</div>`;
     if (b.type === 'section' || b.type === 'choice') return `<div class="blkedit"><div><b>${esc(b.label)}.</b><textarea data-blk="${it.id}:${bi}">${esc(b.text)}</textarea></div>${del}</div>`;
-    return `<div class="blkedit"><div class="qbody">${blocksHtml([b]) || '<i>(תמונת בקרה מוסתרת)</i>'}</div>${del}</div>`;
+    const size = b.type === 'image' && !b.reference ? `<label>רוחב במסמך (ס״מ) <input type="number" min="2" max="17" step="0.5" placeholder="אוטומטי" data-blkw="${it.id}:${bi}" value="${b.widthCm ?? ''}"></label>` : '';
+    return `<div class="blkedit"><div class="qbody">${blocksHtml([b]) || '<i>(תמונת בקרה מוסתרת)</i>'}${size}</div>${del}</div>`;
   }).join('') + `<button class="btn sm" data-addblk="${it.id}">+ הוסף פסקה</button>`;
 }
 
@@ -243,7 +266,7 @@ async function importFiles(fileList) {
     const rep = { ...r.report, summary: '' };
     if (!r.report.errors.length) {
       try {
-        await db.savePackage(r);
+        await store.importPackage(r);
         rep.summary = `${r.questions.length} שאלות, ${r.cases.length} סיפורי מקרה, ${r.media.size} תמונות (${KIND_LABEL[r.pkg.kind]})`;
       } catch (e) { rep.errors.push('שמירה מקומית נכשלה: ' + e.message); }
     }
@@ -254,6 +277,7 @@ async function importFiles(fileList) {
 
 // ---------- אירועים ----------
 $app.addEventListener('click', async e => {
+  if (e.target.tagName === 'IMG' && e.target.closest('.qbody, .rub, .casebox, .uimg')) { return openLightbox(e.target.src); }
   const t = e.target.closest('button, .qrow'); if (!t) return;
   const d = t.dataset;
   if (d.tab) { S.tab = d.tab; return render(); }
@@ -262,6 +286,7 @@ $app.addEventListener('click', async e => {
   if (t.id === 'addchecked') { const n = S.checked.size; for (const q of S.questions.filter(q => S.checked.has(q.uid))) addQuestion(S.exam, q, S.cases.get(q.caseStudyId)); S.checked.clear(); saveExamSoon(); toast(`${n} שאלות נוספו למבחן`); return render(); }
   if (d.add) { const q = qByUid(d.add); addQuestion(S.exam, q, S.cases.get(q.caseStudyId)); saveExamSoon(); toast(q.caseStudyId ? 'השאלה נוספה, וסיפור המקרה צורף פעם אחת (אפשר להסיר במבחן)' : 'השאלה נוספה למבחן'); return render(); }
   if (d.uid && !e.target.matches('input')) { S.sel = d.uid; return render(); }
+  if (d.rmimg) { const [a, b] = d.rmimg.split(':'); const it = S.exam.items.find(i => i.id === a); it.images = it.images.filter(i => i.id !== b); saveExamSoon(); return render(); }
   if (d.mv) { const [dir, id] = d.mv.split(':'); moveItem(S.exam, id, dir === 'up' ? -1 : 1); saveExamSoon(); return render(); }
   if (d.rm) { removeItem(S.exam, d.rm); saveExamSoon(); return render(); }
   if (d.edit) { S.editing.has(d.edit) ? S.editing.delete(d.edit) : S.editing.add(d.edit); return render(); }
@@ -270,9 +295,9 @@ $app.addEventListener('click', async e => {
   if (t.id === 'eqsplit') { equalSplit(S.exam); saveExamSoon(); return render(); }
   if (t.id === 'newexam') { S.exam = newExam(); S.editing.clear(); saveExamSoon(); return render(); }
   if (t.id === 'dupexam') { const c = JSON.parse(JSON.stringify(S.exam)); c.id = newExam().id; c.title += ' (עותק)'; S.exam = c; saveExamSoon(); return render(); }
-  if (t.id === 'delexam') { if (!confirm('למחוק את המבחן? השאלות במאגר לא יימחקו.')) return; await db.del('exams', S.exam.id); S.exams = S.exams.filter(x => x.id !== S.exam.id); S.exam = S.exams[0] || newExam(); return render(); }
+  if (t.id === 'delexam') { if (!confirm('למחוק את המבחן? השאלות במאגר לא יימחקו.')) return; await store.deleteExam(S.exam.id); S.exams = S.exams.filter(x => x.id !== S.exam.id); S.exam = S.exams[0] || newExam(); return render(); }
   if (t.id === 'exp-s' || t.id === 'exp-t') return exportDoc(t.id === 'exp-t' ? 'teacher' : 'student');
-  if (d.rmpkg) { if (!confirm('להסיר את החבילה מהמאגר המקומי? מבחנים קיימים שומרים עותקים של השאלות.')) return; await db.removePackage(d.rmpkg); await loadAll(); return render(); }
+  if (d.rmpkg) { if (!confirm('להסיר את החבילה מהמאגר המקומי? מבחנים קיימים שומרים עותקים של השאלות.')) return; await store.removePackage(d.rmpkg); await loadAll(); return render(); }
   if (t.id === 'devload') {
     const names = await (await fetch('/__samples/')).json(); const files = [];
     for (const n of names) files.push(new File([await (await fetch('/__samples/' + encodeURIComponent(n))).arrayBuffer()], n));
@@ -293,6 +318,18 @@ $app.addEventListener('change', async e => {
   if (d.pts) { const it = S.exam.items.find(i => i.id === d.pts); it.points = t.value === '' ? null : Number(t.value); saveExamSoon(); return render(); }
   if (d.lines) { S.exam.items.find(i => i.id === d.lines).answerLines = Number(t.value) || 0; saveExamSoon(); return; }
   if (d.pb) { S.exam.items.find(i => i.id === d.pb).pageBreak = t.checked; saveExamSoon(); return; }
+  if (d.upimg) {
+    const it = S.exam.items.find(i => i.id === d.upimg); const f = t.files[0]; if (!f) return;
+    try {
+      const { data, name } = await prepareImage(f); const id = uid();
+      const key = 'user/' + id; S.media.set(key, data); await store.putMedia(key, data);
+      (it.images ||= []).push({ id, key, name, widthCm: 10, position: 'below' });
+      saveExamSoon(); toast('התמונה נוספה ונשמרת יחד עם המבחן'); return render();
+    } catch (err) { return toast('העלאת התמונה נכשלה: ' + err.message); }
+  }
+  if (d.imgw) { const [a, b] = d.imgw.split(':'); S.exam.items.find(i => i.id === a).images.find(i => i.id === b).widthCm = Math.min(17, Math.max(2, Number(t.value) || 10)); saveExamSoon(); return render(); }
+  if (d.imgpos) { const [a, b] = d.imgpos.split(':'); S.exam.items.find(i => i.id === a).images.find(i => i.id === b).position = t.value; saveExamSoon(); return render(); }
+  if (d.blkw) { const [a, bi] = d.blkw.split(':'); const blk = S.exam.items.find(i => i.id === a).snap.blocks[+bi]; blk.widthCm = t.value === '' ? undefined : Math.min(17, Math.max(2, Number(t.value))); saveExamSoon(); return; }
   if (d.casein) { S.exam.cases[d.casein].include = t.checked; saveExamSoon(); return render(); }
 });
 $app.addEventListener('input', e => {
@@ -304,6 +341,12 @@ $app.addEventListener('input', e => {
 const input = {};
 $app.addEventListener('dragover', e => { if (e.target.closest('#drop')) { e.preventDefault(); e.target.closest('#drop').classList.add('over'); } });
 $app.addEventListener('drop', e => { if (e.target.closest('#drop')) { e.preventDefault(); importFiles([...e.dataTransfer.files].filter(f => f.name.endsWith('.zip'))); } });
+
+function openLightbox(src) {
+  const lb = document.createElement('div'); lb.className = 'lightbox';
+  lb.innerHTML = `<img src="${src}" alt="תצוגה מוגדלת"><span>לחצו לסגירה</span>`;
+  lb.addEventListener('click', () => lb.remove()); document.body.appendChild(lb);
+}
 
 async function exportDoc(mode) {
   const e = S.exam;
@@ -317,6 +360,13 @@ async function exportDoc(mode) {
 }
 
 await loadAll();
+// גרסת כללי הייבוא/הסיווג: אם השתנתה, החבילות המקומיות נטענות מחדש (בפיתוח – מתיקיית samples)
+const ADAPTER_VERSION = '2';
+if (localStorage.getItem('adapterVersion') !== ADAPTER_VERSION) {
+  for (const p of S.packages) await store.removePackage(p.id);
+  await loadAll();
+  localStorage.setItem('adapterVersion', ADAPTER_VERSION);
+}
 render();
 // פיתוח בלבד: מאגר ריק -> טעינה אוטומטית של חבילות הדוגמה, כדי שהאתר ייפתח עם נתונים
 if (import.meta.env.DEV && !S.packages.length) {

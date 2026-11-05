@@ -21,9 +21,10 @@ function textRuns(text, o = {}) {
 }
 const P = (children, o = {}) => new Paragraph({ bidirectional: true, children, ...o });
 
-function imageParagraph(u8, { maxW = 520, maxH = 480, alt = 'איור', after = 120 } = {}) {
+// ברירת מחדל גדולה כדי שמספרים וסימונים בתרשימים מורכבים יישארו קריאים (640px ~ 17 ס"מ). widthCm גובר.
+function imageParagraph(u8, { maxW = 640, maxH = 640, widthCm = null, alt = 'איור', after = 120 } = {}) {
   const { w, h } = imageSize(u8);
-  const s = Math.min(1, maxW / w, maxH / h);
+  const s = widthCm ? (widthCm * 96 / 2.54) / w : Math.min(1, maxW / w, maxH / h);
   const type = u8[0] === 0x89 ? 'png' : 'jpg';
   return new Paragraph({
     alignment: AlignmentType.CENTER, keepNext: false, spacing: { before: 80, after },
@@ -68,13 +69,13 @@ function answerLines(n) {
 }
 
 // בלוקים של תוכן -> אלמנטים; lines: שורות תשובה לכל סעיף (או בסוף השאלה אם אין סעיפים)
-function renderBlocks(blocks, ctx, { lines = 0, showSectionPoints = false } = {}) {
+function renderBlocks(blocks, ctx, { lines = 0, showSectionPoints = false, noKeep = false } = {}) {
   const out = [];
   const hasSections = blocks.some(b => b.type === 'section');
   const visible = blocks.filter(b => !(b.type === 'image' && b.reference));
   visible.forEach((b, i) => {
     const next = visible[i + 1];
-    const keepNext = !!next && (next.type === 'table' || next.type === 'image' || next.type === 'choice');
+    const keepNext = !noKeep && !!next && (next.type === 'table' || next.type === 'image' || next.type === 'choice');
     if (b.type === 'text') out.push(P(textRuns(b.text), { keepNext, keepLines: keepNext, spacing: { after: 100 } }));
     else if (b.type === 'caption') out.push(P(textRuns(b.text, { italics: true, size: 20 }), { alignment: AlignmentType.CENTER }));
     else if (b.type === 'section') {
@@ -87,7 +88,7 @@ function renderBlocks(blocks, ctx, { lines = 0, showSectionPoints = false } = {}
       out.push(tableFrom(b.rows), spacer(100));
     } else if (b.type === 'image') {
       const u8 = ctx.getMedia(b.mediaKey);
-      if (u8) { out.push(imageParagraph(u8, { alt: b.caption || 'איור' })); if (b.caption) out.push(P(textRuns(b.caption, { italics: true, size: 20 }), { alignment: AlignmentType.CENTER })); }
+      if (u8) { out.push(imageParagraph(u8, { alt: b.caption || 'איור', widthCm: b.widthCm })); if (b.caption) out.push(P(textRuns(b.caption, { italics: true, size: 20 }), { alignment: AlignmentType.CENTER })); }
       else out.push(P([run('[תמונה חסרה]', { color: 'AA0000' })]));
     }
     // שורות תשובה: אחרי כל סעיף (כשיש סעיפים), כלומר לפני הסעיף הבא או בסוף
@@ -97,6 +98,18 @@ function renderBlocks(blocks, ctx, { lines = 0, showSectionPoints = false } = {}
     }
   });
   return out;
+}
+
+// תמונה לצד השאלה: טבלה דו-עמודתית בלי מסגרת (עמודה ימנית = תוכן השאלה)
+function sideBySide(content, imgs) {
+  const none = { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' };
+  const borders = { top: none, bottom: none, left: none, right: none };
+  const textW = Math.round(CONTENT_DXA * 0.64), imgW = CONTENT_DXA - textW;
+  const cell = (w, kids) => new TableCell({ width: { size: w, type: WidthType.DXA }, borders, margins: { left: 80, right: 80 }, children: [...kids, P([run('')], { spacing: { after: 0 } })] });
+  return new Table({
+    visuallyRightToLeft: true, layout: TableLayoutType.FIXED, width: { size: CONTENT_DXA, type: WidthType.DXA }, columnWidths: [textW, imgW],
+    rows: [new TableRow({ children: [cell(textW, content), cell(imgW, imgs)] })],
+  });
 }
 
 function sectionPointsMatch(item) {
@@ -182,10 +195,18 @@ export function buildExamDocument(exam, { getMedia }, mode = 'student') {
     const head = [run(`שאלה ${idx + 1}`, { bold: true, size: 26 })];
     if (exam.showPoints && it.points) head.push(run(` (${it.points} נקודות)`, { size: 24 }));
     ch.push(P(head, { keepNext: true, pageBreakBefore: !!it.pageBreak, spacing: { before: 200, after: 80 } }));
-    ch.push(...renderBlocks(it.snap.blocks, ctx, {
+    const imgs = (it.images || []).filter(im => getMedia(im.key));
+    const userImg = (im, maxW) => imageParagraph(getMedia(im.key), { maxW, widthCm: im.widthCm, alt: im.name });
+    imgs.filter(im => im.position === 'above').forEach(im => ch.push(userImg(im, 640)));
+    const content = renderBlocks(it.snap.blocks, ctx, {
       lines: teacher ? 0 : (Number(it.answerLines) || 0),
       showSectionPoints: exam.showPoints && sectionPointsMatch(it),
-    }));
+      noKeep: imgs.some(im => im.position === 'side'),
+    });
+    const side = imgs.filter(im => im.position === 'side');
+    if (side.length) ch.push(sideBySide(content, side.map(im => imageParagraph(getMedia(im.key), { maxW: 250, widthCm: Math.min(im.widthCm, 6.5), alt: im.name }))));
+    else ch.push(...content);
+    imgs.filter(im => im.position === 'below').forEach(im => ch.push(userImg(im, 640)));
     if (teacher) ch.push(...rubricBox(it, ctx));
     else ch.push(spacer(60));
   });

@@ -2,6 +2,7 @@
 // לא משנה את ה-ZIP; מתעלם מקבצים שאינם חלק מהחבילה ומדווח.
 import JSZip from 'jszip';
 import { cleanText, cellLines } from './clean.js';
+import { refineQuestionType, DIAGRAM_TYPE, DIAGRAM_TYPE_LABEL } from './classify.js';
 
 const LIMITS = { maxEntries: 500, maxJsonBytes: 20e6, maxMediaBytes: 25e6, maxTotalMediaBytes: 150e6 };
 const KNOWN_FILES = new Set(['manifest.json', 'questions.json', 'taxonomy.json', 'reviews.json', 'source-references.json']);
@@ -83,7 +84,9 @@ function normBlocks(blocks, ctx, where) {
       b.role = raw.role || null;
       b.caption = raw.caption || null;
       // תמונת מקור של טבלה שקיימת גם כטבלה עריכה -> בקרה בלבד, לא מוצגת
-      b.reference = hasTable && /table/i.test(raw.role || '');
+      // תמונת מקור של טבלה (שקיימת גם כטבלה עריכה) = בקרה בלבד. הכרעה לפי שם הקובץ: תרשים/איור/חיתוך/עמוד תמיד מוצג.
+      const fname = raw.path.split('/').pop();
+      b.reference = hasTable && /table/i.test(fname) && !/(diagram|figure|crop|imaging|page|options)/i.test(fname);
       b.scanned = /scanned|rubric_page/i.test(raw.role || '');
       ctx.mediaNeeded.add(raw.path);
     } else { ctx.report.warnings.push(`${where}: סוג בלוק לא מוכר '${raw.type}' דולג`); continue; }
@@ -133,7 +136,7 @@ export async function parsePackage(data, fileName = 'package.zip') {
   const expected = pick(manifest, 'expected_questions', 'expected_question_count');
 
   const tax = {
-    types: taxonomy.question_types || {},
+    types: { ...(taxonomy.question_types || {}), [DIAGRAM_TYPE]: DIAGRAM_TYPE_LABEL },
     domains: taxonomy.domains || taxonomy.knowledge_domains || {},
   };
 
@@ -175,7 +178,7 @@ export async function parsePackage(data, fileName = 'package.zip') {
     if (!blocks.some(b => b.text || b.rows || b.mediaKey)) report.errors.push(`${q.id}: שאלה בלי תוכן`);
     if (!rec.domainId) report.errors.push(`${q.id}: חסר נושא ראשי`);
     rec.searchText = [rec.title, ...blocks.map(b => b.text || ''), ...blocks.flatMap(b => (b.rows || []).flat().map(c => cellLines(c).join(' ')))].join(' ');
-    questions.push(rec);
+    questions.push(refineQuestionType(rec));
   }
   if (expected != null && expected !== questions.length) report.warnings.push(`צפויות ${expected} שאלות, נקלטו ${questions.length}`);
 

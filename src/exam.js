@@ -25,6 +25,7 @@ export function itemFromQuestion(q) {
     points: q.points ?? null,
     answerLines: 0,
     pageBreak: false,
+    images: [], // תמונות שהמורה הוסיף: {id,key,name,widthCm,position:'above'|'below'|'side'}
   };
 }
 

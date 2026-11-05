@@ -1,12 +1,12 @@
 // שמירה מקומית בדפדפן (IndexedDB). בספרינט 2 תוחלף/תתווסף שמירה בענן.
 const DB_NAME = 'health-exam-builder';
-const STORES = { packages: 'id', questions: 'uid', cases: 'uid', media: 'key', exams: 'id', personal: 'uid', suggestions: 'id' };
+const STORES = { packages: 'id', questions: 'uid', cases: 'uid', media: 'key', exams: 'id', personal: 'uid', suggestions: 'id', meta: 'key' };
 let dbp;
 
 function open() {
   if (dbp) return dbp;
   dbp = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 2);
+    const req = indexedDB.open(DB_NAME, 3);
     req.onupgradeneeded = () => {
       const db = req.result;
       for (const [name, keyPath] of Object.entries(STORES)) {
@@ -72,5 +72,52 @@ export async function removePackage(pkgId) {
   const ms = tx.objectStore('media');
   const mreq = ms.getAllKeys();
   mreq.onsuccess = () => mreq.result.filter(k => String(k).startsWith(pkgId + '/')).forEach(k => ms.delete(k));
+  return done(tx);
+}
+
+// ייבוא ממוזג (ממשק מנהל): חדש -> נוסף; זהה -> מדולג; שונה -> הרשומה הקיימת נשמרת ומסומנת לבדיקה (לא נדרסת).
+export async function mergePackage({ pkg, questions, cases, media }, { publish = true } = {}) {
+  const db = await open();
+  const tx = db.transaction(['packages', 'questions', 'cases', 'media'], 'readwrite');
+  const qs = tx.objectStore('questions'), cs = tx.objectStore('cases'), ms = tx.objectStore('media');
+  const res = { added: 0, skipped: 0, conflicts: 0, mediaAdded: 0, casesAdded: 0 };
+  const sig = q => JSON.stringify([q.blocks, q.rubric]);
+  for (const q of questions) {
+    const ex = await new Promise(r => { const g = qs.get(q.uid); g.onsuccess = () => r(g.result); });
+    if (!ex) { qs.put({ ...q, published: publish }); res.added++; }
+    else if (sig(ex) === sig(q) || ex.adminEdited) { if (sig(ex) !== sig(q)) { ex.reviewFlag = true; ex.conflictNote = 'הגיעה גרסה שונה בייבוא חוזר'; qs.put(ex); res.conflicts++; } else res.skipped++; }
+    else { ex.reviewFlag = true; ex.conflictNote = 'הגיעה גרסה שונה בייבוא חוזר'; qs.put(ex); res.conflicts++; }
+  }
+  for (const c of cases) {
+    const ex = await new Promise(r => { const g = cs.get(c.uid); g.onsuccess = () => r(g.result); });
+    if (!ex) { cs.put(c); res.casesAdded++; }
+  }
+  for (const [key, data] of media) {
+    const ex = await new Promise(r => { const g = ms.getKey(key); g.onsuccess = () => r(g.result); });
+    if (ex === undefined) { ms.put({ key, data }); res.mediaAdded++; }
+  }
+  tx.objectStore('packages').put(pkg);
+  await done(tx);
+  return res;
+}
+
+export async function getOne(store, key) {
+  const db = await open();
+  return asPromise(db.transaction(store).objectStore(store).get(key));
+}
+
+// החלפת כל המאגר המרכזי (שחזור מגיבוי). נתונים אישיים ומבחנים לא נוגעים.
+export async function replaceCentral({ packages, questions, cases, media, taxonomy }) {
+  const db = await open();
+  const tx = db.transaction(['packages', 'questions', 'cases', 'media', 'meta'], 'readwrite');
+  for (const n of ['packages', 'questions', 'cases']) tx.objectStore(n).clear();
+  const ms = tx.objectStore('media');
+  // קודם מוחקים מדיה מרכזית ישנה, ורק אחר כך כותבים את החדשה (אחרת המחיקה תמחק גם אותה)
+  const keys = ms.getAllKeys();
+  keys.onsuccess = () => { keys.result.filter(k => !String(k).startsWith('user/')).forEach(k => ms.delete(k)); for (const [key, data] of media) ms.put({ key, data }); };
+  packages.forEach(p => tx.objectStore('packages').put(p));
+  questions.forEach(q => tx.objectStore('questions').put(q));
+  cases.forEach(c => tx.objectStore('cases').put(c));
+  tx.objectStore('meta').put({ key: 'taxonomy', value: taxonomy || { domains: {}, types: {} } });
   return done(tx);
 }

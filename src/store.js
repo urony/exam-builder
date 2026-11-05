@@ -32,7 +32,14 @@ export const localStore = {
     await db.put('suggestions', rec); return rec;
   },
   loadSuggestions: () => db.getAll('suggestions'),
-  importPackage: parsed => db.savePackage(parsed),
+  importPackage: (parsed, opts) => (opts ? db.mergePackage(parsed, opts) : db.savePackage(parsed)),
+  // ניהול המאגר המרכזי (בענן: Firestore, כתיבה למנהל בלבד)
+  saveBankQuestion: q => db.put('questions', JSON.parse(JSON.stringify(q))),
+  deleteBankQuestion: uid => db.del('questions', uid),
+  saveSuggestion: s => db.put('suggestions', JSON.parse(JSON.stringify(s))),
+  async loadTaxonomy() { return (await db.getOne('meta', 'taxonomy'))?.value || { domains: {}, types: {} }; },
+  saveTaxonomy: value => db.put('meta', { key: 'taxonomy', value }),
+  replaceCentral: data => db.replaceCentral(data),
   removePackage: id => db.removePackage(id),
 };
 

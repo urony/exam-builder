@@ -4,13 +4,14 @@ import { store } from './store.js';
 import { newExam, uid, addQuestion, totalPoints, removeItem, moveItem, equalSplit, isChoiceQuestion, caseFirstUse } from './exam.js';
 import { buildExamDocument, toBlob } from './docx-export.js';
 import { prepareImage } from './images.js';
+import { createAdmin } from './admin.js';
 import { LETTERS, SOURCE_OPTIONS, emptyDraft, draftToQuestion, validateDraft, questionToDraft, itemToDraft } from './personal.js';
 
 const ANATOMY_TOOL_URL = 'https://urony.github.io/Anatomic-Pictures-Finder-tool/';
 
 // ---------- מצב ----------
 const S = {
-  tab: 'bank',
+  tab: 'work', mode: localStorage.getItem('mode') || 'split', pv: 'edit', pvTeacher: false, modal: null,
   packages: [], questions: [], cases: new Map(), media: new Map(), urls: new Map(),
   tax: { types: {}, domains: {} },
   f: { text: '', domains: new Set(), types: new Set(), kinds: new Set(), years: new Set(), codes: new Set() },
@@ -33,9 +34,11 @@ async function loadAll() {
   S.questions = bank.questions.concat(S.personal);
   S.tax = { types: {}, domains: {} };
   for (const p of S.packages) { Object.assign(S.tax.types, p.taxonomy.types); Object.assign(S.tax.domains, p.taxonomy.domains); }
+  const meta = await store.loadTaxonomy(); Object.assign(S.tax.domains, meta.domains || {}); Object.assign(S.tax.types, meta.types || {});
   if (!S.exam) S.exam = S.exams[0] || newExam();
 }
 const qByUid = uid => S.questions.find(q => q.uid === uid);
+const vis = () => S.questions.filter(q => q.published !== false); // שאלות מוסתרות לא מוצגות למורים
 const label = (map, k) => S.tax[map][k] || k || '—';
 const mediaUrl = key => {
   if (!S.urls.has(key)) { const u8 = S.media.get(key); if (!u8) return ''; S.urls.set(key, URL.createObjectURL(new Blob([u8], { type: u8[0] === 0x89 ? 'image/png' : 'image/jpeg' }))); }
@@ -58,7 +61,7 @@ function saveExamSoon() {
 function srcLabel(q) { if (q.kind === 'personal') return 'שאלה אישית'; return q.kind === 'bagrut' ? `בגרות ${q.year ?? ''}${q.examCode ? ' · ' + q.examCode : ''}` : 'שאלה ממורה'; }
 function filtered() {
   const f = S.f; const words = f.text.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  let r = S.questions.filter(q => {
+  let r = vis().filter(q => {
     if (f.domains.size && !f.domains.has(q.domainId)) return false;
     if (f.types.size && !f.types.has(q.typeId)) return false;
     if (f.kinds.size && !f.kinds.has(q.kind)) return false;
@@ -78,14 +81,14 @@ const uniq = (arr) => [...new Set(arr.filter(x => x != null))];
 
 // ---------- תצוגת תוכן ----------
 function cellHtml(c) { const l = cellLines(c); return l.length ? l.map(esc).join('<br>') : '&nbsp;'; }
-function blocksHtml(blocks) {
+function blocksHtml(blocks, opts = {}) {
   return blocks.map(b => {
     if (b.type === 'text') return `<p>${esc(b.text)}</p>`;
     if (b.type === 'caption') return `<p><i>${esc(b.text)}</i></p>`;
-    if (b.type === 'section') return `<div class="sec"><b>${esc(b.label)}.</b> ${esc(b.text)}${b.points != null ? ` <span class="badge">${b.points} נק׳</span>` : ''}</div>`;
+    if (b.type === 'section') return `<div class="sec"><b>${esc(b.label)}.</b> ${esc(b.text)}${b.points != null && opts.pts !== false ? ` <span class="badge">${b.points} נק׳</span>` : ''}</div>`;
     if (b.type === 'choice') return `<div class="ch"><b>${esc(b.label)}.</b> ${esc(b.text)}</div>`;
     if (b.type === 'table') return `<table>${b.rows.map(r => `<tr>${r.map(c => `<td>${cellHtml(c)}</td>`).join('')}</tr>`).join('')}</table>`;
-    if (b.type === 'image') return b.reference ? '' : `<img src="${mediaUrl(b.mediaKey)}" alt="${esc(b.caption || 'איור')}">`;
+    if (b.type === 'image') return b.reference ? '' : `<img src="${mediaUrl(b.mediaKey)}" alt="${esc(b.caption || 'איור')}"${b.widthCm ? ` style="width:${Math.min(100, b.widthCm / 17 * 100)}%"` : ''}>`;
     return '';
   }).join('');
 }
@@ -113,16 +116,102 @@ const badgesOf = q => [
 // ---------- מסכים ----------
 function render() {
   const e = S.exam;
+  const modes = [['search', 'חיפוש'], ['split', 'משולב'], ['exam', 'מבחן']];
   $app.innerHTML = `
   <header class="top">
-    <h1>בונה מבחנים · מדעי הבריאות</h1>
+    <h1>בונה מבחנים <small>מדעי הבריאות</small></h1>
     <nav class="tabs">
-      ${[['bank', 'מאגר שאלות'], ['exam', 'המבחן שלי'], ['personal', 'המאגר האישי'], ['import', 'ייבוא חבילות']].map(([k, t]) => `<button data-tab="${k}" class="${S.tab === k ? 'on' : ''}">${t}</button>`).join('')}
+      <button data-tab="work" class="${S.tab === 'work' ? 'on' : ''}">בניית מבחן</button>
+      <button data-tab="personal" class="${S.tab === 'personal' ? 'on' : ''}">המאגר האישי</button>
+      <button data-tab="admin" class="${S.tab === 'admin' ? 'on' : ''}">ניהול (מקומי)</button>
     </nav>
+    ${S.tab === 'work' ? `<div class="seg" role="group" aria-label="מצב תצוגה">${modes.map(([k, t]) => `<button data-mode="${k}" class="${S.mode === k ? 'on' : ''}">${t}</button>`).join('')}</div>` : ''}
     <span class="spacer"></span>
     <span class="pill" id="pill">${e.items.length} שאלות במבחן · ${totalPoints(e)} נק׳</span>
   </header>
-  <main>${S.tab === 'bank' ? bankView() : S.tab === 'exam' ? examView() : S.tab === 'personal' ? personalView() : importView()}</main>`;
+  <main class="${S.tab === 'work' ? 'm-' + S.mode : ''}">${S.tab === 'work' ? workView() : S.tab === 'personal' ? personalView() : adminView()}</main>
+  ${S.modal && qByUid(S.modal) ? `<div class="modal" data-closemodal><div class="modalbox card"><button class="btn sm" data-closemodal style="float:inline-end">סגור ✕</button>${detailHtml(qByUid(S.modal))}</div></div>` : ''}`;
+  requestAnimationFrame(() => {
+    const p = document.getElementById('paper'); if (!p) return;
+    const ph = p.offsetWidth * 29.7 / 21; p.style.setProperty('--ph', ph + 'px');
+    const est = document.getElementById('pgest'); if (est) est.textContent = '≈ ' + Math.max(1, Math.ceil(p.scrollHeight / ph)) + ' עמודים (הערכה)';
+  });
+}
+function adminView() { return admin.view(); }
+
+function workView() {
+  if (S.mode === 'search') return bankView();
+  if (S.mode === 'exam') return `<div class="examwrap">${examPanel(false)}</div>`;
+  return `<div class="split"><section class="splitL">${bankCompact()}</section><section class="splitR">${examPanel(true)}</section></div>`;
+}
+
+function bankCompact() {
+  if (!S.questions.length) return '<div class="card empty">המאגר ריק. הוסיפו חבילות בלשונית "ניהול".</div>';
+  const list = filtered();
+  return `<div class="card compact">
+    <input type="search" id="q" placeholder="חיפוש חופשי בטקסט…" value="${esc(S.f.text)}">
+    <details class="fdet"><summary>מסננים${Object.values(S.f).some(v => v instanceof Set && v.size) ? ' (פעילים)' : ''}</summary><div class="filters">
+      ${filterGroup('נושא (תחום ראשי)', 'domains', uniq(vis().map(q => q.domainId)).map(d => [d, label('domains', d)]))}
+      ${filterGroup('סוג שאלה', 'types', uniq(vis().map(q => q.typeId)).map(t => [t, label('types', t)]))}
+      ${filterGroup('מקור השאלות', 'kinds', uniq(vis().map(q => q.kind)).map(k => [k, KIND_LABEL[k]]))}
+      ${filterGroup('שנת בחינה', 'years', uniq(vis().map(q => q.year)).sort((a, b) => b - a).map(y => [y, y]))}
+      <p><button class="btn sm" id="reset">איפוס מסננים</button></p></div></details>
+    <div class="listhead"><b>${list.length} שאלות</b>
+      <select id="sort"><option value="year-desc" ${S.sort === 'year-desc' ? 'selected' : ''}>חדש לישן</option><option value="year-asc" ${S.sort === 'year-asc' ? 'selected' : ''}>ישן לחדש</option><option value="domain" ${S.sort === 'domain' ? 'selected' : ''}>לפי נושא</option></select>
+      <span class="spacer"></span><button class="btn sm" id="selall">בחר הכול</button>
+      <button class="btn primary sm" id="addchecked" ${S.checked.size ? '' : 'disabled'}>הוסף ${S.checked.size || ''} נבחרות</button></div>
+    <div class="clist">${list.slice(0, 300).map(q => `<div class="qrow" data-uid="${esc(q.uid)}"><input type="checkbox" data-chk="${esc(q.uid)}" ${S.checked.has(q.uid) ? 'checked' : ''}>
+      <div class="grow"><div class="t">${esc(q.title || q.blocks.find(b => b.text)?.text.slice(0, 80) || '(ללא כותרת)')}</div><div class="s">${esc(srcLabel(q))}${q.kind === 'bagrut' ? ' · שאלה ' + esc(q.originalNumber) : ''}</div><div>${badgesOf(q)}</div></div>
+      <button class="btn sm" data-add="${esc(q.uid)}" title="הוסף למבחן">+</button></div>`).join('') || '<div class="empty">אין תוצאות</div>'}</div></div>`;
+}
+
+function examPanel(compact) {
+  const pvModes = compact ? [['edit', 'עריכה'], ['preview', 'תצוגה מקדימה']] : [['edit', 'עריכה'], ['both', 'עריכה + תצוגה'], ['preview', 'תצוגה מקדימה']];
+  if (compact && S.pv === 'both') S.pv = 'edit';
+  if (!compact && S.pv === 'edit' && !S._pvTouched) S.pv = 'both';
+  const bar = `<div class="pvbar"><div class="seg sm">${pvModes.map(([k, t]) => `<button data-pv="${k}" class="${S.pv === k ? 'on' : ''}">${t}</button>`).join('')}</div>
+    ${S.pv !== 'edit' ? `<label class="chk"><input type="checkbox" data-pvt ${S.pvTeacher ? 'checked' : ''}> גרסת מורה (עם תשובות)</label>` : ''}
+    <span class="spacer"></span><span id="saveind" class="badge"></span></div>`;
+  if (S.pv === 'preview') return bar + paper();
+  if (S.pv === 'both' && !compact) return bar + `<div class="two"><div>${editHtml(false)}</div><div>${paper()}</div></div>`;
+  return bar + editHtml(compact);
+}
+
+function rubricOpen(r) {
+  const hasKey = r.answer.some(b => b.isKey);
+  const body = r.answer.map(b => b.isKey ? `<p><b>תשובה נכונה:</b> ${esc(b.text)}</p>` : (b.type === 'image' && hasKey ? '' : (b.type === 'image' && b.scanned ? '<p><i>המחוון הרשמי סרוק – יצורף כנספח במסמך.</i></p>' : blocksHtml([b])))).join('');
+  return `<div class="p-rub"><b>${r.officialKind === 'official' ? 'מחוון רשמי' : 'תשובה (לפי מחבר השאלה)'}</b>${body}${r.notes ? `<p><b>הנחיות בדיקה:</b> ${esc(r.notes)}</p>` : ''}${r.allocation.length ? `<p><b>חלוקת ניקוד:</b> ${r.allocation.map(a => esc(a.component) + ' – ' + (a.percent != null ? a.percent + '%' : esc(a.points ?? ''))).join('; ')}</p>` : ''}</div>`;
+}
+function paper() {
+  const e = S.exam, teacher = S.pvTeacher, first = caseFirstUse(e), tot = totalPoints(e);
+  const pic = im => `<img src="${mediaUrl(im.key)}" alt="" style="width:${Math.min(100, im.widthCm / 17 * 100)}%">`;
+  let h = `<div class="paperwrap"><div class="pvnote">תצוגה משוערת של המסמך. מעברי עמוד ופריסה ב־Word עשויים להיות שונים מעט. <b id="pgest"></b></div><div class="paper" id="paper">`;
+  if (e.school) h += `<div class="p-school">${esc(e.school)}</div>`;
+  h += `<h2 class="p-title">${esc(e.title || 'מבחן')}</h2>`;
+  if (teacher) h += '<div class="p-teacher">גרסת מורה – כולל תשובות ומחוונים</div>';
+  const meta = [e.teacher && 'מורה: ' + e.teacher, e.date && 'תאריך: ' + e.date, e.showPoints && tot ? `סה״כ ${tot} נקודות` : null].filter(Boolean);
+  if (meta.length) h += `<div class="p-meta">${meta.map(esc).join(' &nbsp;|&nbsp; ')}</div>`;
+  if (!teacher) h += '<div class="p-name">שם התלמיד/ה: ____________________ &nbsp; כיתה: ________</div>';
+  if (e.instructions) h += `<div class="p-instr"><b>הוראות</b>${e.instructions.split(/\n+/).map(t => `<p>${esc(t)}</p>`).join('')}</div>`;
+  h += '<hr>';
+  if (!e.items.length) h += '<div class="empty">המבחן ריק. הוסיפו שאלות מהמאגר.</div>';
+  e.items.forEach((it, i) => {
+    const cid = first.get(it.id); if (cid) h += `<div class="p-case"><b>סיפור מקרה</b>${blocksHtml(e.cases[cid].blocks)}</div>`;
+    if (it.pageBreak) h += '<div class="p-break">— התחלת עמוד חדש —</div>';
+    const secs = it.snap.blocks.filter(b => b.type === 'section' && b.points != null);
+    const secPts = e.showPoints && secs.length && secs.reduce((a, b) => a + b.points, 0) === Number(it.points);
+    const imgs = it.images || [];
+    const body = `<div class="qbody">${blocksHtml(it.snap.blocks, { pts: secPts })}</div>`;
+    const side = imgs.filter(x => x.position === 'side').map(pic).join('');
+    h += `<div class="p-q"><div class="p-qh">שאלה ${i + 1}${e.showPoints && it.points ? ` <span>(${it.points} נקודות)</span>` : ''}</div>`;
+    h += imgs.filter(x => x.position === 'above').map(pic).join('');
+    h += side ? `<div class="sidewrap">${body}<div class="sideimg">${side}</div></div>` : body;
+    h += imgs.filter(x => x.position === 'below').map(pic).join('');
+    if (!teacher && !isChoiceQuestion(it.snap.blocks) && it.answerLines > 0) h += '<div class="p-lines">' + '<div class="p-line"></div>'.repeat(Math.min(20, it.answerLines)) + '</div>';
+    if (teacher && it.snap.rubric) h += rubricOpen(it.snap.rubric);
+    h += '</div>';
+  });
+  return h + '</div></div>';
 }
 
 function filterGroup(title, key, entries) {
@@ -136,11 +225,11 @@ function bankView() {
   return `<div class="bank">
     <aside class="card filters">
       <input type="search" id="q" placeholder="חיפוש חופשי בטקסט…" value="${esc(S.f.text)}">
-      ${filterGroup('נושא (תחום ראשי)', 'domains', uniq(S.questions.map(q => q.domainId)).map(d => [d, label('domains', d)]))}
-      ${filterGroup('סוג שאלה', 'types', uniq(S.questions.map(q => q.typeId)).map(t => [t, label('types', t)]))}
-      ${filterGroup('מקור השאלות', 'kinds', uniq(S.questions.map(q => q.kind)).map(k => [k, KIND_LABEL[k]]))}
-      ${filterGroup('שנת בחינה', 'years', uniq(S.questions.map(q => q.year)).sort((a, b) => b - a).map(y => [y, y]))}
-      ${filterGroup('סמל שאלון', 'codes', uniq(S.questions.map(q => q.examCode)).map(c => [c, c]))}
+      ${filterGroup('נושא (תחום ראשי)', 'domains', uniq(vis().map(q => q.domainId)).map(d => [d, label('domains', d)]))}
+      ${filterGroup('סוג שאלה', 'types', uniq(vis().map(q => q.typeId)).map(t => [t, label('types', t)]))}
+      ${filterGroup('מקור השאלות', 'kinds', uniq(vis().map(q => q.kind)).map(k => [k, KIND_LABEL[k]]))}
+      ${filterGroup('שנת בחינה', 'years', uniq(vis().map(q => q.year)).sort((a, b) => b - a).map(y => [y, y]))}
+      ${filterGroup('סמל שאלון', 'codes', uniq(vis().map(q => q.examCode)).map(c => [c, c]))}
       <p><button class="btn sm" id="reset">איפוס מסננים</button></p>
     </aside>
     <section class="card list">
@@ -169,15 +258,14 @@ function detailHtml(q) {
     ${rubricHtml(q.rubric)}`;
 }
 
-function examView() {
+function editHtml(compact) {
   const e = S.exam; const tot = totalPoints(e); const diff = tot - e.targetPoints; const first = caseFirstUse(e);
   return `<div class="card">
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
       <select id="examsel">${S.exams.some(x => x.id === e.id) ? '' : `<option value="${e.id}">${esc(e.title)} (לא נשמר)</option>`}${S.exams.map(x => `<option value="${x.id}" ${x.id === e.id ? 'selected' : ''}>${esc(x.title)}</option>`).join('')}</select>
       <button class="btn sm" id="newexam">מבחן חדש</button><button class="btn sm" id="dupexam">שכפל</button><button class="btn sm danger" id="delexam">מחק מבחן</button>
-      <span class="spacer"></span><span id="saveind" class="badge"></span>
     </div>
-    <div class="exam-meta">
+    ${compact ? '<details><summary>פרטי המבחן והגדרות</summary>' : ''}<div class="exam-meta">
       <label>כותרת המבחן<input data-m="title" value="${esc(e.title)}"></label>
       <label>בית ספר<input data-m="school" value="${esc(e.school)}"></label>
       <label>שם המורה<input data-m="teacher" value="${esc(e.teacher)}"></label>
@@ -186,7 +274,7 @@ function examView() {
       <label style="flex-direction:row;align-items:center;gap:6px;margin-top:18px"><input type="checkbox" data-m="showPoints" ${e.showPoints ? 'checked' : ''}> הצג ניקוד במסמך התלמיד</label>
     </div>
     <label class="exam-meta" style="display:block;margin-top:10px"><label>הוראות כלליות (אופציונלי)<textarea data-m="instructions" rows="2" style="width:100%">${esc(e.instructions)}</textarea></label></label>
-  </div>
+  ${compact ? '</details>' : ''}</div>
   <div class="totalbar ${diff ? 'warn' : ''}" id="totalbar">${totalHtml(tot, e.targetPoints)}
     <span class="spacer"></span>
     <button class="btn sm" id="newq">+ שאלה חדשה במבחן</button>
@@ -194,7 +282,7 @@ function examView() {
     <button class="btn primary" id="exp-s" ${e.items.length ? '' : 'disabled'}>הפק Word לתלמיד</button>
     <button class="btn primary" id="exp-t" ${e.items.length ? '' : 'disabled'}>הפק Word למורה</button>
   </div>
-  ${e.items.length ? e.items.map((it, i) => itemHtml(it, i, first)).join('') : '<div class="card empty">המבחן ריק. הוסיפו שאלות מלשונית "מאגר שאלות".</div>'}`;
+  ${e.items.length ? e.items.map((it, i) => itemHtml(it, i, first)).join('') : '<div class="card empty">המבחן ריק. הוסיפו שאלות מהמאגר.</div>'}`;
 }
 function totalHtml(tot, target) {
   const d = tot - target;
@@ -295,33 +383,43 @@ function importView() {
     ${S.packages.length ? S.packages.map(p => `<div class="rep">${esc(p.fileName)} · ${KIND_LABEL[p.kind]} · ${p.questionCount} שאלות · ${p.mediaCount} תמונות · ${p.caseCount} סיפורי מקרה <button class="btn sm danger" data-rmpkg="${esc(p.id)}">הסר</button></div>`).join('') : '<div class="empty">אין חבילות</div>'}</div>`;
 }
 
-async function importFiles(fileList) {
+async function importFiles(fileList, opts = { publish: true }) {
   S.importReports = [];
   for (const f of fileList) {
     const r = await parsePackage(await f.arrayBuffer(), f.name);
     const rep = { ...r.report, summary: '' };
     if (!r.report.errors.length) {
       try {
-        await store.importPackage(r);
-        rep.summary = `${r.questions.length} שאלות, ${r.cases.length} סיפורי מקרה, ${r.media.size} תמונות (${KIND_LABEL[r.pkg.kind]})`;
+        const res = await store.importPackage(r, { publish: opts.publish !== false });
+        rep.summary = `${r.questions.length} שאלות בחבילה (${KIND_LABEL[r.pkg.kind]}): נוספו ${res.added}, דולגו כזהות ${res.skipped}, סומנו לבדיקה (גרסה שונה) ${res.conflicts}; ${res.mediaAdded} תמונות חדשות${opts.publish === false ? ' · יובאו כמוסתרות' : ''}`;
       } catch (e) { rep.errors.push('שמירה מקומית נכשלה: ' + e.message); }
     }
     S.importReports.push(rep);
   }
   await loadAll(); render();
 }
+async function devLoad() {
+  const names = await (await fetch('/__samples/')).json(); const files = [];
+  for (const n of names) files.push(new File([await (await fetch('/__samples/' + encodeURIComponent(n))).arrayBuffer()], n));
+  return importFiles(files, { publish: true });
+}
 
 // ---------- אירועים ----------
 $app.addEventListener('click', async e => {
   if (e.target.tagName === 'IMG' && e.target.closest('.qbody, .rub, .casebox, .uimg')) { return openLightbox(e.target.src); }
+  if (e.target.closest('[data-closemodal]') && (e.target.matches('.modal') || e.target.closest('button[data-closemodal]'))) { S.modal = null; return render(); }
   const t = e.target.closest('button, .qrow'); if (!t) return;
   const d = t.dataset;
+  if (e.target.closest('[data-admchk]')) return;
+  if (d.adm !== undefined && await admin.click(t, d)) return;
+  if (d.mode) { S.mode = d.mode; localStorage.setItem('mode', d.mode); if (d.mode !== 'exam' && S.pv === 'both') S.pv = 'edit'; S._pvTouched = false; return render(); }
+  if (d.pv) { S.pv = d.pv; S._pvTouched = true; return render(); }
   if (d.tab) { S.tab = d.tab; return render(); }
   if (t.id === 'reset') { S.f = { text: '', domains: new Set(), types: new Set(), kinds: new Set(), years: new Set(), codes: new Set() }; return render(); }
   if (t.id === 'selall') { filtered().forEach(q => S.checked.add(q.uid)); return render(); }
   if (t.id === 'addchecked') { const n = S.checked.size; for (const q of S.questions.filter(q => S.checked.has(q.uid))) addQuestion(S.exam, q, S.cases.get(q.caseStudyId)); S.checked.clear(); saveExamSoon(); toast(`${n} שאלות נוספו למבחן`); return render(); }
   if (d.add) { const q = qByUid(d.add); addQuestion(S.exam, q, S.cases.get(q.caseStudyId)); saveExamSoon(); toast(q.caseStudyId ? 'השאלה נוספה, וסיפור המקרה צורף פעם אחת (אפשר להסיר במבחן)' : 'השאלה נוספה למבחן'); return render(); }
-  if (d.uid && !e.target.matches('input')) { S.sel = d.uid; return render(); }
+  if (d.uid && !e.target.matches('input')) { S.sel = d.uid; if (S.mode === 'split') S.modal = d.uid; return render(); }
   if (d.rmimg) { const [a, b] = d.rmimg.split(':'); const it = S.exam.items.find(i => i.id === a); it.images = it.images.filter(i => i.id !== b); saveExamSoon(); return render(); }
   if (d.mv) { const [dir, id] = d.mv.split(':'); moveItem(S.exam, id, dir === 'up' ? -1 : 1); saveExamSoon(); return render(); }
   if (d.rm) { removeItem(S.exam, d.rm); saveExamSoon(); return render(); }
@@ -362,7 +460,9 @@ $app.addEventListener('click', async e => {
 });
 $app.addEventListener('change', async e => {
   const t = e.target; const d = t.dataset;
-  if (t.id === 'files') return importFiles([...t.files]);
+  if (await admin.change(t, d)) return;
+  if (d.pvt !== undefined) { S.pvTeacher = t.checked; return render(); }
+  if (t.id === 'files') return importFiles([...t.files], { publish: S.adm.publishOnImport });
   if (t.id === 'sort') { S.sort = t.value; return render(); }
   if (t.id === 'examsel') { S.exam = S.exams.find(x => x.id === t.value); S.editing.clear(); return render(); }
   if (d.f) { t.checked ? S.f[d.f].add(t.value) : S.f[d.f].delete(t.value); return render(); }
@@ -396,6 +496,7 @@ $app.addEventListener('change', async e => {
 });
 $app.addEventListener('input', e => {
   const t = e.target; const d = t.dataset;
+  if (admin.input(t)) return;
   if (t.id === 'q') { S.f.text = t.value; clearTimeout(input.h); input.h = setTimeout(() => { render(); const q = document.getElementById('q'); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }, 250); }
   if (d.pq) { S.pq[d.pq] = t.value; return; }
   if (d.pql) { const [k, i] = d.pql.split(':'); S.pq[k][+i] = t.value; return; }
@@ -404,7 +505,7 @@ $app.addEventListener('input', e => {
 });
 const input = {};
 $app.addEventListener('dragover', e => { if (e.target.closest('#drop')) { e.preventDefault(); e.target.closest('#drop').classList.add('over'); } });
-$app.addEventListener('drop', e => { if (e.target.closest('#drop')) { e.preventDefault(); importFiles([...e.dataTransfer.files].filter(f => f.name.endsWith('.zip'))); } });
+$app.addEventListener('drop', e => { if (e.target.closest('#drop')) { e.preventDefault(); importFiles([...e.dataTransfer.files].filter(f => f.name.endsWith('.zip')), { publish: S.adm.publishOnImport }); } });
 
 function openLightbox(src) {
   const lb = document.createElement('div'); lb.className = 'lightbox';
@@ -423,6 +524,7 @@ async function exportDoc(mode) {
   } catch (err) { console.error(err); toast('ההפקה נכשלה: ' + err.message); }
 }
 
+const admin = createAdmin({ S, store, esc, toast, render, label, srcLabel, blocksHtml, loadAll, devLoad });
 await loadAll();
 // גרסת כללי הייבוא/הסיווג: אם השתנתה, החבילות המקומיות נטענות מחדש (בפיתוח – מתיקיית samples)
 const ADAPTER_VERSION = '2';
@@ -437,7 +539,7 @@ if (import.meta.env.DEV && !S.packages.length) {
   try {
     const names = await (await fetch('/__samples/')).json(); const files = [];
     for (const n of names) files.push(new File([await (await fetch('/__samples/' + encodeURIComponent(n))).arrayBuffer()], n));
-    if (files.length) { await importFiles(files); S.tab = 'bank'; render(); toast(`נטענו ${S.questions.length} שאלות מחבילות הדוגמה`); }
+    if (files.length) { await importFiles(files, { publish: true }); S.tab = 'work'; render(); toast(`נטענו ${S.questions.length} שאלות מחבילות הדוגמה`); }
   } catch { /* אין samples */ }
 }
 window.__app = { S, importFiles, render };

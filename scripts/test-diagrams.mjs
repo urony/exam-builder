@@ -25,5 +25,5 @@ const it2 = exam.items[1]; it2.images = [{ id: 'b', key: 'user/a', name: 'side.p
 const it3 = exam.items[2]; it3.images = [{ id: 'c', key: 'user/a', name: 'below.png', widthCm: 8, position: 'below' }];
 exam.items.forEach(i => { i.points = 5; i.answerLines = 2; });
 fs.mkdirSync('out', { recursive: true });
-fs.writeFileSync('out/diagrams-student.docx', await toBuffer(buildExamDocument(exam, { getMedia: k => media.get(k) }, 'student')));
+for (const mode of ['student', 'teacher']) fs.writeFileSync(`out/diagrams-${mode}.docx`, await toBuffer(buildExamDocument(exam, { getMedia: k => media.get(k) }, mode)));
 console.log('ok', exam.items.length);

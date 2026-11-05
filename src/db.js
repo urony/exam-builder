@@ -1,15 +1,16 @@
 // שמירה מקומית בדפדפן (IndexedDB). בספרינט 2 תוחלף/תתווסף שמירה בענן.
 const DB_NAME = 'health-exam-builder';
-const STORES = { packages: 'id', questions: 'uid', cases: 'uid', media: 'key', exams: 'id' };
+const STORES = { packages: 'id', questions: 'uid', cases: 'uid', media: 'key', exams: 'id', personal: 'uid', suggestions: 'id' };
 let dbp;
 
 function open() {
   if (dbp) return dbp;
   dbp = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
+    const req = indexedDB.open(DB_NAME, 2);
     req.onupgradeneeded = () => {
       const db = req.result;
       for (const [name, keyPath] of Object.entries(STORES)) {
+        if (db.objectStoreNames.contains(name)) continue; // שדרוג גרסה: רק מחסנים חדשים
         const s = db.createObjectStore(name, { keyPath });
         if (name === 'questions' || name === 'cases') s.createIndex('pkgId', 'pkgId');
       }

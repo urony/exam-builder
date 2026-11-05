@@ -7,7 +7,7 @@ import { refineQuestionType, DIAGRAM_TYPE, DIAGRAM_TYPE_LABEL } from './classify
 const LIMITS = { maxEntries: 500, maxJsonBytes: 20e6, maxMediaBytes: 25e6, maxTotalMediaBytes: 150e6 };
 const KNOWN_FILES = new Set(['manifest.json', 'questions.json', 'taxonomy.json', 'reviews.json', 'source-references.json']);
 
-export const KIND_LABEL = { bagrut: 'שאלות ממבחנים', teacher: 'שאלות ממורים' };
+export const KIND_LABEL = { bagrut: 'שאלות ממבחנים', teacher: 'שאלות ממורים', personal: 'שאלות מהמאגר האישי' };
 
 function safePath(name) {
   if (!name || name.includes('\\') || name.startsWith('/') || /^[A-Za-z]:/.test(name)) return false;

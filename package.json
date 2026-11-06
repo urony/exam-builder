@@ -7,7 +7,10 @@
     "preview": "vite preview",
     "test": "node scripts/test-adapter.mjs samples && node scripts/test-safety.mjs && node scripts/test-personal.mjs && node scripts/test-structure.mjs && node scripts/test-admin-filters.mjs && node scripts/test-admin-bulk.mjs && node scripts/test-export-safety.mjs && node scripts/test-cloud.mjs && node scripts/test-rules.mjs && node scripts/test-quota-rules.mjs && node scripts/test-usage.mjs && node scripts/test-case-groups.mjs && node scripts/test-backup.mjs && node scripts/test-cloud-emulator.mjs && node scripts/test-backup-emulator.mjs",
     "release-check": "node scripts/release-check.mjs",
-    "test:full": "firebase emulators:exec --only firestore --project demo-exam \"npm test\""
+    "test:full": "firebase emulators:exec --only firestore --project demo-exam \"npm test\"",
+    "guide:shots": "node scripts/guide-shots.mjs",
+    "guide:build": "node scripts/build-guide.mjs",
+    "ui:smoke": "node scripts/ui-smoke.mjs"
   },
   "type": "module",
   "dependencies": {

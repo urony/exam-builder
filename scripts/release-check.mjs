@@ -19,6 +19,7 @@ const secret = /(api[_-]?key|secret|passw(or)?d|BEGIN (RSA|PRIVATE|OPENSSH)|AIza
 const hits = [];
 for (const f of files.filter(f => !/package-lock\.json$/.test(f) && f !== 'scripts/release-check.mjs' && f !== 'src/firebase-config.js')) {
   let text; try { text = readFileSync(f, 'utf8'); } catch { continue; }
+  text = text.replace(/data:image\/[a-z+]+;base64,[A-Za-z0-9+/=]+/g, 'data:IMG');   // תמונות משובצות (המדריך) מכילות רצפי base64 אקראיים
   if (secret.test(text)) hits.push(f);
 }
 if (hits.length) fail('נמצאו דפוסי סוד בקבצים: ' + hits.join(', '));

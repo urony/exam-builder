@@ -31,7 +31,7 @@ export async function launch({ port = 9333 + Math.floor(Math.random() * 500) } =
   await send('Page.enable'); await send('Runtime.enable');
   const api = {
     logs, send,
-    async viewport(w, h, mobile = false) { await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile }); },
+    async viewport(w, h, mobile = false) { await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile, screenWidth: w, screenHeight: h, positionX: 0, positionY: 0 }); await new Promise(r => setTimeout(r, 250)); },
     async goto(url) { await send('Page.navigate', { url }); await new Promise(r => setTimeout(r, 400)); await api.waitFor('document.readyState === "complete"'); },
     async eval(expr) {
       const r = await send('Runtime.evaluate', { expression: `(async()=>{ return (${expr}) })()`, awaitPromise: true, returnByValue: true });

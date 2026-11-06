@@ -702,11 +702,11 @@ function pqForm() {
     ${p.error ? `<div class="editnote" role="alert">${esc(p.error)}</div>` : ''}
     <div class="pqgrid">
       <fieldset class="pqmeta"><legend>פרטי השאלה</legend>
-        <label class="${miss.src ? 'bad' : ''}">מקור ${req}<select data-pq="sourceKind">${Object.entries(SOURCE_OPTIONS).map(([k, l]) => `<option value="${k}" ${p.sourceKind === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-        <label>פרטי מקור <small>(אופציונלי)</small><input data-pq="sourceText" value="${esc(p.sourceText)}"></label>
-        <label class="${miss.dom ? 'bad' : ''}">תחום עיקרי ${req}<select data-pq="domainId"><option value="">בחרו…</option>${Object.entries(S.tax.domains).map(([k, l]) => `<option value="${k}" ${p.domainId === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
-        <label>סוג שאלה <small>(אופציונלי)</small><select data-pq="typeId"><option value="">—</option>${Object.entries(S.tax.types).map(([k, l]) => `<option value="${k}" ${p.typeId === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
-        <label>כותרת לחיפוש <small>(אופציונלי)</small><input data-pq="title" value="${esc(p.title)}"></label>
+        <label class="${miss.src ? 'bad' : ''}"><span class="lbl">מקור ${req}</span><select data-pq="sourceKind">${Object.entries(SOURCE_OPTIONS).map(([k, l]) => `<option value="${k}" ${p.sourceKind === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        <label><span class="lbl">פרטי מקור <small>(אופציונלי)</small></span><input data-pq="sourceText" value="${esc(p.sourceText)}"></label>
+        <label class="${miss.dom ? 'bad' : ''}"><span class="lbl">תחום עיקרי ${req}</span><select data-pq="domainId"><option value="">בחרו…</option>${Object.entries(S.tax.domains).map(([k, l]) => `<option value="${k}" ${p.domainId === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
+        <label><span class="lbl">סוג שאלה <small>(אופציונלי)</small></span><select data-pq="typeId"><option value="">—</option>${Object.entries(S.tax.types).map(([k, l]) => `<option value="${k}" ${p.typeId === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
+        <label><span class="lbl">כותרת לחיפוש <small>(אופציונלי)</small></span><input data-pq="title" value="${esc(p.title)}"></label>
       </fieldset>
       <div class="pqwrite">
         <label class="${miss.body ? 'bad' : ''}"><span class="lbl">גוף השאלה ${req} <small>(אפשר להשאיר ריק אם יש סעיפים או אפשרויות)</small></span><textarea class="pqbody" rows="9" data-pq="body">${esc(p.body)}</textarea></label>

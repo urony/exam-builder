@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="he" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>לוח סגנון</title>
+<link rel="stylesheet" href="/src/style.css">
+<style>body{padding:22px;max-width:1100px;margin:0 auto} .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:10px 0} h4.lbl{margin:18px 0 4px;color:var(--muted);font-size:12.5px;font-weight:600} .menu{position:static;display:flex}</style>
+<link id="theme" rel="stylesheet" href=""></head><body>
+<h2 class="panelttl" style="margin-top:0">לוח סגנון: כותרות, תוויות, כפתורים, תגיות, תפריט</h2>
+<h1 style="margin:6px 0">בונה מבחנים <small style="font-weight:400;font-size:14px;color:var(--muted)">מדעי הבריאות</small></h1>
+<div class="hero" style="padding:8px 0;text-align:start"><h2 style="font-size:28px">כותרת ראשית: בניית מבחן ממאגר שאלות</h2><p style="margin:0">טקסט משני: מתאימים את המבחן לכיתה ומפיקים קובץ Word מוכן להדפסה.</p></div>
+<h4 class="lbl">כפתורים</h4>
+<div class="row"><button class="btn primary">הפק Word לתלמיד</button><button class="btn">הפק Word למורה</button><button class="btn sm">+ פרק כאן</button><button class="btn sm primary">+ הוסף</button><button class="btn sm danger">מחק</button><button class="btn" disabled>מבוטל</button><button class="ibtn" aria-label="למעלה"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m6 15 6-6 6 6"/></svg></button><button class="ibtn danger" aria-label="מחיקה"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M6 7l1 12h10l1-12M9 7V4h6v3"/></svg></button></div>
+<h4 class="lbl">בורר מצב</h4>
+<div class="row"><div class="seg"><button>חיפוש בלבד</button><button class="on">משולב</button><button>מבחן בלבד</button></div><div class="seg sm"><button class="on">כל השאלות</button><button>לא השתמשתי</button><button>כבר השתמשתי</button></div></div>
+<h4 class="lbl">תגיות ותוויות</h4>
+<div class="row"><span class="badge src">בגרות 2026</span><span class="badge">אנדוקרינולוגיה</span><span class="badge ok">מחוון</span><span class="badge inx">במבחן הנוכחי</span><span class="badge used">השתמשת בה</span><span class="tag">טבלה</span><span class="tag">תמונה</span><button class="fchip">תחומי ידע: 2 ✕</button></div>
+<h4 class="lbl">שדות</h4>
+<div class="row"><label class="fld">נק׳ <input class="n3" type="number" value="25"></label><label class="fld">שורות <input class="n2" type="number" value="4"></label><input placeholder="חיפוש חופשי בטקסט…" style="width:260px"><select><option>מודרני (ברירת מחדל)</option></select></div>
+<h4 class="lbl">תפריט</h4>
+<div class="row"><div class="menu" role="menu" style="min-width:240px"><button>תמונה מהמחשב</button><button>עמוד מתוך PDF</button><a class="mi" href="#">כלי האיורים האנטומיים ↗</a></div></div>
+<h4 class="lbl">כרטיס שאלה קומפקטי ופרק</h4>
+<div class="chap l1"><span class="drag">⠿</span><input value="פרק א: מערכת העצבים" aria-label="כותרת פרק"><span class="badge cnt">3 שאלות</span></div>
+<div class="card item cmp"><div class="ih1"><span class="drag">⠿</span><span class="num">שאלה 4</span><span class="mvs"><button class="ibtn" aria-label="מעלה">▲</button><button class="ibtn" aria-label="מטה">▼</button></span><span class="ibadges"><span class="badge src">בגרות 2025</span><span class="badge">קרדיולוגיה</span><span class="badge ok">מחוון</span></span></div>
+<div class="ih2"><label class="fld">נק׳ <input class="n3" type="number" value="12"></label><label class="fld">שורות <input class="n2" type="number" value="3"></label><label class="chk"><input type="checkbox"> עמוד חדש</label><button class="btn sm">+ פרק כאן</button><button class="btn sm">ערוך עותק</button><button class="btn sm">הוסף תמונה ▾</button><button class="ibtn danger push" aria-label="מחיקה">✕</button></div>
+<div class="qbody"><p>הסבירו כיצד פועל מנגנון המשוב השלילי בוויסות רמת הסוכר בדם, וציינו שני איברים המעורבים בתהליך.</p></div></div>
+<script>const p=new URLSearchParams(location.search).get('theme'); if(p) document.getElementById('theme').href='/docs/design/theme-'+p+'.css';</script>
+</body></html>

@@ -424,3 +424,12 @@ label.bad select, label.bad textarea, label.bad input { border-color:var(--dange
 .excard:hover { border-color:#a5b4fc; }
 .excard .exbtns { cursor:default; }
 @media (max-width: 560px) { .totop span { display:none; } .totop { left:14px; padding:8px; } .helpnav { font-size:12.5px; } }
+.qbody .sec .badge, .qbody .ch .badge { text-indent:0; }
+.item.cmp .ih2 { gap:6px 8px; }
+.item input.n3 { width:3.7em; padding:4px 2px; }
+.item input.n2 { width:3em; padding:4px 2px; }
+.ih2 .btn.sm { padding:2px 9px; }
+.pqmeta .lbl, .pqwrite .lbl { display:block; }
+.pqsec .blkedit > div { display:flex; gap:8px; align-items:flex-start; }
+.pqsec .blkedit textarea { flex:1; margin:0; }
+.pqsec .blkedit b { padding-top:8px; }

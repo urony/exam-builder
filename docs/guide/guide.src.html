@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>מדריך למורים – בונה מבחנים במדעי הבריאות</title>
+<style>
+/*GUIDE_THEME*/
+:root { --bg:#f4f6fb; --card:#fff; --ink:#1e293b; --muted:#5b6b7f; --accent:#4f46e5; --accent-soft:#eef2ff; --line:#e2e8f0; --tip:#ecfdf5; --tip-line:#a7f3d0; --tip-ink:#065f46; --warn:#fef3c7; --warn-ink:#92400e; --font:"Segoe UI","Assistant","Heebo","Arial Hebrew",Arial,sans-serif; --head-font:var(--font); }
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:70px}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font);font-size:17px;line-height:1.7}
+a{color:var(--accent)}
+.top{position:sticky;top:0;z-index:5;background:var(--card);border-bottom:1px solid var(--line);padding:10px 20px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.top b{font-family:var(--head-font);font-size:18px}
+.top a.back{margin-inline-start:auto;text-decoration:none;border:1px solid var(--line);border-radius:10px;padding:5px 14px;font-weight:600;font-size:15px;color:var(--ink)}
+.wrap{max-width:900px;margin:0 auto;padding:24px 20px 60px}
+h1{font-family:var(--head-font);font-size:34px;line-height:1.25;margin:10px 0 6px}
+.lead{color:var(--muted);font-size:18px;margin:0 0 20px}
+h2{font-family:var(--head-font);font-size:26px;margin:0 0 8px;padding-top:6px}
+h3{font-size:19px;margin:20px 0 4px}
+section.chap{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px 24px;margin:18px 0}
+h2 .num{display:inline-block;background:var(--accent);color:#fff;border-radius:99px;min-width:30px;height:30px;line-height:30px;text-align:center;font-weight:700;font-size:15px;margin-inline-end:8px}
+nav.toc{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px 22px;margin:16px 0}
+nav.toc h2{font-size:20px;margin:0 0 6px}
+nav.toc ol{margin:0;padding-inline-start:24px;columns:2;column-gap:30px}
+nav.toc li{margin:3px 0;break-inside:avoid}
+ol.steps{padding-inline-start:26px}
+ol.steps li, ul li{margin:6px 0}
+.tip,.warn{border-radius:12px;padding:10px 14px;margin:14px 0;font-size:16px}
+.tip{background:var(--tip);border:1px solid var(--tip-line);color:var(--tip-ink)}
+.warn{background:var(--warn);border:1px solid #fde68a;color:var(--warn-ink)}
+.tip::before{content:"טיפ: ";font-weight:700}
+.warn::before{content:"שימו לב: ";font-weight:700}
+figure{margin:16px 0;text-align:center}
+figure img{max-width:100%;height:auto;border:1px solid var(--line);border-radius:12px;box-shadow:0 2px 10px rgba(15,23,42,.08)}
+figcaption{color:var(--muted);font-size:14.5px;margin-top:6px}
+.faq details{border:1px solid var(--line);border-radius:12px;margin:8px 0;padding:2px 14px;background:#fff}
+.faq summary{cursor:pointer;font-weight:700;padding:10px 0}
+.faq details[open] summary{color:var(--accent)}
+kbd{background:#eef0f6;border:1px solid #cbd5e1;border-radius:5px;padding:0 6px;font-size:14px}
+.k{background:var(--accent-soft);border-radius:6px;padding:0 7px;font-weight:600;white-space:nowrap}
+footer{color:var(--muted);text-align:center;font-size:14px;margin-top:30px}
+a:focus-visible,summary:focus-visible{outline:3px solid #6366f1;outline-offset:2px}
+@media (max-width:640px){body{font-size:16.5px}.wrap{padding:14px 12px 40px}section.chap{padding:16px 14px}nav.toc ol{columns:1}h1{font-size:27px}h2{font-size:22px}}
+@media print{.top{display:none}body{background:#fff;font-size:12pt}section.chap{border:0;padding:0;break-inside:auto}figure,.tip,.warn{break-inside:avoid}h2{break-after:avoid}.faq details{border:0}.faq details>*{display:block}nav.toc{border:0}a{color:inherit;text-decoration:none}}
+</style>
+</head>
+<body>
+<div class="top"><b>מדריך למורים · בונה מבחנים</b><a class="back" href="./">חזרה לאתר</a></div>
+<main class="wrap">
+<h1>איך בונים מבחן במדעי הבריאות</h1>
+<p class="lead">מדריך קצר ומעשי: מחפשים שאלות במאגר, בונים מבחן, ומפיקים קובץ Word מוכן להדפסה, לתלמידים ולמורה.</p>
+
+<nav class="toc" aria-label="תוכן עניינים"><h2>תוכן עניינים</h2><ol>
+<li><a href="#intro">הכרות: מה אפשר לעשות כאן</a></li>
+<li><a href="#start">כניסה והתחלה</a></li>
+<li><a href="#search">חיפוש שאלות</a></li>
+<li><a href="#build">בניית מבחן</a></li>
+<li><a href="#cases">סיפורי מקרה</a></li>
+<li><a href="#images">תמונות ואיורים</a></li>
+<li><a href="#export">הפקת המבחן</a></li>
+<li><a href="#saving">שמירה והמשך עבודה</a></li>
+<li><a href="#personal">המאגר האישי</a></li>
+<li><a href="#faq">שאלות נפוצות</a></li>
+</ol></nav>
+
+<section class="chap" id="intro"><h2><span class="num">1</span>הכרות: מה אפשר לעשות כאן</h2>
+<p>האתר מאפשר לבנות מבחן ממאגר שאלות מסודר: בגרויות קודמות ושאלות שכתבו מורים. אפשר לערוך עותק של כל שאלה, להוסיף תמונות, לחלק ניקוד, לסדר את המבחן בפרקים ולהפיק מסמך Word בעברית, בגרסת תלמיד ובגרסת מורה עם תשובות.</p>
+<h3>שני מאגרים</h3>
+<ul>
+<li><b>המאגר המרכזי</b> משותף לכל המורים. אי אפשר לשנות בו שאלות. עריכה במבחן משפיעה רק על העותק שלכם.</li>
+<li><b>המאגר האישי שלכם</b> מכיל שאלות שכתבתם בעצמכם. הוא פרטי, ורק אתם רואים אותו. את השאלות האלה אפשר לשלב במבחנים, ואפשר גם להציע אותן למאגר המרכזי.</li>
+</ul>
+<h3>איפה נשמרים המבחנים?</h3>
+<p>אחרי התחברות עם Google המבחנים נשמרים ב־Google Drive שלכם (בתיקייה פרטית של האתר), ורק אתם רואים אותם. בלי התחברות הם נשמרים בדפדפן הזה בלבד, ולכן מומלץ להתחבר.</p>
+<figure><img data-shot="home" alt="דף הבית של האתר"><figcaption>דף הבית: ממנו מתחילים.</figcaption></figure>
+</section>
+
+<section class="chap" id="start"><h2><span class="num">2</span>כניסה והתחלה</h2>
+<ol class="steps">
+<li>לוחצים על <span class="k">התחברות עם Google</span> בפינה העליונה ובוחרים את חשבון Google שלכם. האתר מבקש הרשאה לשמור קבצים בתיקייה הפרטית שלו ב־Drive, ולא רואה שום קובץ אחר.</li>
+<li>בדף הבית בוחרים מה לעשות: <span class="k">בניית מבחן חדש</span>, <span class="k">המשך עבודה על המבחן האחרון</span>, <span class="k">המבחנים שלי</span> לפתיחת מבחן קיים, חיפוש במאגר או המאגר האישי.</li>
+<li>מבחן חדש לא נשמר עד שמשנים בו משהו, ולכן אין סכנה ליצור מבחנים ריקים.</li>
+</ol>
+<div class="tip">אפשר לחזור לדף הבית בכל רגע בלחיצה על שם האתר בפינה הימנית העליונה.</div>
+<div class="warn">אחרי כשעה ייתכן שהחיבור ל־Drive יפוג. האתר יציג הודעה עם כפתור "התחבר מחדש", והעבודה שלכם נשמרת בינתיים במחשב ותסונכרן.</div>
+</section>
+
+<section class="chap" id="search"><h2><span class="num">3</span>חיפוש שאלות</h2>
+<p>במסך <span class="k">בניית מבחן</span> יש שלושה מצבי תצוגה: <b>חיפוש בלבד</b>, <b>משולב</b> (המאגר מימין והמבחן משמאל), ו<b>מבחן בלבד</b>. עוברים ביניהם בלי לאבד את המבחן או את החיפוש.</p>
+<figure><img data-shot="split" alt="המסך המשולב: מאגר מימין, מבחן משמאל"><figcaption>המסך המשולב. בכפתורי "רוחב" אפשר להרחיב את המאגר או את המבחן.</figcaption></figure>
+<h3>איך מחפשים</h3>
+<ul>
+<li><b>חיפוש חופשי:</b> מקלידים מילה או ביטוי בשדה החיפוש. כל המילים צריכות להופיע בשאלה.</li>
+<li><b>מסננים:</b> תחומי ידע, סוגי שאלות, מקור (בחינות בגרות, מורים, המאגר האישי), שנת בחינה, ו"נוספים" (סמל שאלון). אפשר לבחור כמה ערכים בכל קבוצה.</li>
+<li><b>מיון:</b> מהחדש לישן, מהישן לחדש, או לפי נושא.</li>
+</ul>
+<h3>מסננים מתקפלים</h3>
+<p>כל קבוצת מסננים נפתחת וננעלת בלחיצה על שמה. כשהקבוצה סגורה רואים כמה נבחרו בה, למשל "תחומי ידע · 2 נבחרו". מתחת לחיפוש מופיעים כל המסננים הפעילים כחצים קטנים: לוחצים על אחד כדי להסיר אותו, או על "נקה הכול". כך תמיד ברור למה התוצאות מצומצמות. הפתיחה והסגירה נשמרות לביקור הבא.</p>
+<figure><img data-shot="filters" alt="מסננים מתקפלים עם חיווי בחירה"><figcaption>קבוצות מסננים מתקפלות, עם חיווי למה שנבחר.</figcaption></figure>
+<h3 id="search-used">שאלות שכבר השתמשתם בהן</h3>
+<p>מעל הרשימה יש שלוש אפשרויות: <span class="k">כל השאלות</span>, <span class="k">לא השתמשתי</span>, <span class="k">כבר השתמשתי</span>. שאלה נחשבת "משומשת" אם היא מופיעה באחד מהמבחנים השמורים שלכם, או אם סימנתם אותה ידנית ("סמן כמשומשת" ליד השאלה). הסימון אישי: מורים אחרים לא מושפעים. מחיקת מבחן מחזירה את השאלות שלו ל"לא השתמשתי", אלא אם סימנתם אותן ידנית.</p>
+<h3>בחירת שאלות</h3>
+<ul>
+<li>לחצו על כותרת שאלה כדי לראות אותה במלואה (עם טבלאות, איורים ומחוון).</li>
+<li>לחצו <span class="k">+ הוסף</span> כדי להוסיף שאלה אחת. שאלה שכבר במבחן מסומנת "במבחן" ולא תתווסף פעמיים.</li>
+<li>לבחירת כמה שאלות: סמנו את התיבות ולחצו <span class="k">הוסף נבחרות</span>, או <span class="k">בחר הכול</span> לכל התוצאות הנוכחיות.</li>
+</ul>
+<div class="tip">מצאתם שאלה במאגר האישי? בסינון "מקור" בחרו "המאגר האישי שלי".</div>
+</section>
+
+<section class="chap" id="build"><h2><span class="num">4</span>בניית מבחן</h2>
+<p>כל שאלה במבחן היא כרטיס קומפקטי בשתי שורות. השורה העליונה: מספר, חיצי שינוי סדר, מקור השאלה, תחום ידע וסימן מחוון. השורה התחתונה: ניקוד, שורות לתשובה, עמוד חדש, הוספת פרק, עריכת עותק, הוספת תמונה ומחיקה.</p>
+<figure><img data-shot="card" alt="כרטיס שאלה קומפקטי"><figcaption>כרטיס שאלה במבחן.</figcaption></figure>
+<h3>ניקוד ושורות</h3>
+<ol class="steps">
+<li>בשדה <b>נק׳</b> מקלידים ניקוד (עד שלוש ספרות). הסכום מתעדכן מיד בסרגל מעל הרשימה, עם אזהרה אם הוא שונה מהיעד (ההפקה אינה נחסמת).</li>
+<li>בשדה <b>שורות</b> מקלידים כמה שורות ריקות יוצגו לתשובת התלמיד (עד 20). בשאלות רב־ברירה אין שורות.</li>
+<li>לחלוקת ניקוד שווה בלחיצה אחת: <span class="k">חלוקת ניקוד שווה</span>.</li>
+</ol>
+<h3>סדר, פרקים ועמודים</h3>
+<ul>
+<li><b>שינוי סדר:</b> חצים ליד מספר השאלה, או גרירה בידית שליד המספר. קו מקווקו מראה לאן השאלה תיפול.</li>
+<li><b>פרק ותת־פרק:</b> <span class="k">+ פרק</span> ו־<span class="k">+ תת־פרק</span> מעל הרשימה, או <span class="k">+ פרק כאן</span> בכרטיס שאלה כדי להוסיף כותרת ממש לפניה. פרק נגרר יחד עם השאלות שבתוכו, ואפשר לכווץ אותו בחץ.</li>
+<li><b>טקסט חופשי:</b> הוראות או הסבר בין שאלות.</li>
+<li><b>עמוד חדש:</b> תיבת הסימון בכרטיס מתחילה את השאלה (או הפרק) בעמוד חדש.</li>
+<li><b>ערוך עותק:</b> משנה את הנוסח במבחן שלכם בלבד. המאגר לא משתנה.</li>
+</ul>
+<h3>ניווט במבחן ארוך</h3>
+<p>תיבת "ניווט במבחן" מציגה את הפרקים והשאלות; לחיצה מגללת אליהם. אחרי שגללתם למטה מופיע כפתור <span class="k">לראש המבחן</span> שמחזיר אתכם לתחילת המבחן. במסך המשולב הוא מגלגל רק את אזור המבחן, והמאגר נשאר במקומו.</p>
+<div class="tip">בכל שינוי המבחן נשמר אוטומטית. התצוגה המקדימה מתעדכנת מיד.</div>
+</section>
+
+<section class="chap" id="cases"><h2><span class="num">5</span>סיפורי מקרה</h2>
+<p>סיפור מקרה הוא טקסט פתיחה שמשותף לכמה שאלות. במאגר הוא מוצג כקבוצה אחת עם תווית "סיפור מקרה".</p>
+<ol class="steps">
+<li>לחצו על החץ בקבוצה כדי לראות את הסיפור ואת השאלות שלו.</li>
+<li>לחצו <span class="k">הוסף את כל השאלות</span> כדי להכניס את כולן, או בחרו שאלות בודדות מתוך הקבוצה. אם חלק כבר במבחן, יהיה כפתור "הוסף את הנותרות".</li>
+<li>הסיפור מופיע במבחן פעם אחת, לפני השאלה הראשונה שלו, ונעלם אוטומטית אם מסירים את כל שאלותיו.</li>
+</ol>
+<figure><img data-shot="case" alt="קבוצת סיפור מקרה במאגר"><figcaption>קבוצת סיפור מקרה פתוחה.</figcaption></figure>
+</section>
+
+<section class="chap" id="images"><h2><span class="num">6</span>תמונות ואיורים</h2>
+<p>בכל כרטיס שאלה יש כפתור אחד: <span class="k">הוסף תמונה</span>. הוא פותח תפריט עם שלוש אפשרויות:</p>
+<ul>
+<li><b>תמונה מהמחשב:</b> קובץ PNG, JPG, WebP או GIF.</li>
+<li><b>עמוד מתוך PDF:</b> בוחרים קובץ PDF, רואים תמונות ממוזערות של העמודים ובוחרים עמוד אחד. ההמרה נעשית במחשב שלכם ולא עולה לשום שרת.</li>
+<li><b>כלי האיורים האנטומיים:</b> נפתח בלשונית חדשה. שומרים את האיור במחשב, חוזרים לכאן ומעלים אותו דרך "תמונה מהמחשב".</li>
+</ul>
+<figure><img data-shot="menu" alt="תפריט הוסף תמונה"><figcaption>תפריט "הוסף תמונה".</figcaption></figure>
+<p>התפריט נפתח גם במקלדת: Enter על הכפתור, חצים לבחירה, ו־Esc לסגירה.</p>
+<h3>גודל, מיקום וכוונון</h3>
+<ul>
+<li><b>רוחב</b> בסנטימטרים (2 עד 17).</li>
+<li><b>מיקום:</b> מעל השאלה, מתחת לשאלה או לצדה.</li>
+<li><b>הזזה:</b> חצים לכוונון עדין (0.25 ס״מ בכל לחיצה); "איפוס" מחזיר למקום המקורי. התמונה נשארת בתוך העמוד.</li>
+<li>הגדלה: לחיצה על תמונה במאגר או במבחן מציגה אותה במלואה.</li>
+</ul>
+<div class="tip">התמונות נשמרות יחד עם המבחן ומופיעות גם בתצוגה המקדימה ובקובץ ה־Word.</div>
+</section>
+
+<section class="chap" id="export"><h2><span class="num">7</span>הפקת המבחן</h2>
+<ol class="steps">
+<li><b>תצוגה מקדימה:</b> בלשונית "תצוגה מקדימה" רואים את המסמך כמו שייראה. היא משוערת: מעברי עמוד ב־Word עשויים להיות שונים מעט.</li>
+<li><b>גרסת מורה:</b> סימון "גרסת מורה" מציג את התשובות והמחוונים. מחוון סרוק מצורף כנספח.</li>
+<li><b>תבנית עיצוב:</b> בפרטי המבחן בוחרים "מודרני" או "בגרות" (סגנון מסמך בחינה רשמי). הבחירה נשמרת עם המבחן.</li>
+<li><b>ניקוד:</b> תיבת "הצג ניקוד במסמך התלמיד" שולטת אם הניקוד יודפס.</li>
+<li>לחצו <span class="k">הפק Word לתלמיד</span> או <span class="k">הפק Word למורה</span>. הקובץ יורד למחשב ונפתח ב־Word.</li>
+</ol>
+<figure><img data-shot="preview" alt="תצוגה מקדימה של המבחן"><figcaption>התצוגה המקדימה.</figcaption></figure>
+<div class="warn">אם תמונה לא נטענה (למשל בעיית חיבור), היא תסומן במסמך כ"חסרה" ותוצג הודעה. אפשר לנסות שוב אחרי שהחיבור חזר.</div>
+</section>
+
+<section class="chap" id="saving"><h2><span class="num">8</span>שמירה והמשך עבודה</h2>
+<p>האתר שומר אוטומטית. ליד התצוגה המקדימה מופיע חיווי: "שומר…", "נשמר ✓", "נשמר במחשב בלבד – ממתין לענן" או "השמירה נכשלה". "נשמר ✓" מופיע רק אחרי שהשמירה באמת הושלמה.</p>
+<figure><img data-shot="exams" alt="המסך המבחנים שלי"><figcaption>המבחנים שלי.</figcaption></figure>
+<ul>
+<li><b>פתיחה:</b> בלחיצה על כל הכרטיס (או על "פתיחה").</li>
+<li><b>שינוי שם, שכפול ומחיקה:</b> כפתורים בכרטיס. מחיקה מבקשת אישור, ואינה מוחקת שאלות מהמאגר.</li>
+<li><b>מיון:</b> לפי עדכון אחרון או לפי שם.</li>
+</ul>
+<div class="tip">כשהחיבור ל־Drive נכשל, העבודה נשמרת במחשב ותסונכרן אחר כך. כפתור "נסה שוב" בהודעה מנסה לסנכרן עכשיו.</div>
+</section>
+
+<section class="chap" id="personal"><h2><span class="num">9</span>המאגר האישי</h2>
+<ol class="steps">
+<li>במסך <span class="k">המאגר האישי</span> לוחצים <span class="k">+ שאלה חדשה</span>.</li>
+<li>ממלאים את הפרטים בצד: מקור ותחום עיקרי (חובה), פרטי מקור, סוג וכותרת לחיפוש (אופציונלי).</li>
+<li>בצד הרחב כותבים את גוף השאלה, ואם צריך מוסיפים סעיפים, אפשרויות תשובה (רב־ברירה), תמונה ותשובה/מחוון.</li>
+<li>שומרים. השאלה זמינה גם בבניית מבחן: בחיפוש בוחרים מקור "המאגר האישי שלי", או לוחצים על "חיפוש במאגר האישי שלי".</li>
+</ol>
+<figure><img data-shot="personal" alt="טופס שאלה אישית"><figcaption>טופס שאלה אישית.</figcaption></figure>
+<h3>שאלה שנכתבה בתוך מבחן</h3>
+<p>שאלה חדשה שכתבתם ישירות במבחן יכולה להישמר במאגר האישי בלחיצה על "שמור במאגר האישי".</p>
+<h3>הצעה למאגר המרכזי</h3>
+<p>ליד שאלה אישית יש "הצע למאגר הכללי". אפשר להוסיף קרדיט בשמכם. ההצעה עוברת בדיקה של מנהל המאגר; אחרי האישור היא תופיע לכל המורים. הסטטוס ("ממתינה", "אושרה", "נדחתה") מופיע ליד השאלה, ושאלה שהוגשה לא ניתן להגיש שוב.</p>
+<div class="warn">יש מגבלה על מספר ההצעות הממתינות (50), על מספר התמונות (3 לכל הצעה, 30 בסך הכול) ועל גודל תמונה (עד 2MB). בהגעה למגבלה תוצג הודעה. אם יש לכם הרבה שאלות להוסיף למאגר, אפשר לפנות למנהל.</div>
+</section>
+
+<section class="chap faq" id="faq"><h2><span class="num">10</span>שאלות נפוצות</h2>
+<details><summary>האם מורים אחרים רואים את המבחנים והשאלות שלי?</summary><p>לא. מבחנים ושאלות אישיות נשמרים ב־Drive שלכם ונראים רק לכם. שאלה נעשית גלויה לאחרים רק אם הצעתם אותה והמנהל אישר.</p></details>
+<details><summary>אפשר להשתמש שוב בשאלה שכבר השתמשתי בה?</summary><p>כן. הסימון "כבר השתמשתי" הוא עזר לסינון בלבד, ואינו חוסם הוספה למבחן.</p></details>
+<details><summary>איפה נשמרות השאלות האישיות שלי?</summary><p>ב־Google Drive שלכם, בתיקייה פרטית של האתר. בלי התחברות, בדפדפן הזה בלבד.</p></details>
+<details><summary>אפשר להכניס עמוד מקובץ PDF?</summary><p>כן: "הוסף תמונה" ← "עמוד מתוך PDF". בוחרים עמוד אחד, והוא נכנס כתמונה שאפשר לשנות את גודלה ומיקומה.</p></details>
+<details><summary>איך מקבלים גרסת מורה?</summary><p>בכפתור "הפק Word למורה". המסמך כולל תשובות ומחוונים. בתצוגה המקדימה אפשר לראות אותה לפני ההפקה.</p></details>
+<details><summary>מה עושים כשהשמירה נכשלה?</summary><p>העבודה נשמרת במחשב. לחצו "נסה שוב" בהודעה, או "התחבר מחדש" אם החיבור פג. אם ההודעה חוזרת, הורידו Word של המבחן כגיבוי ופנו למנהל.</p></details>
+<details><summary>המאגר לא נטען, מה לעשות?</summary><p>לחצו "נסה לטעון שוב". אם הבעיה נמשכת, ודאו שאתם מחוברים לאינטרנט, ופתחו "פרטים טכניים" כדי לשלוח אותם למנהל.</p></details>
+<details><summary>רוצה להוסיף הרבה שאלות למאגר המרכזי, איך?</summary><p>הגשת הצעות אחת־אחת מוגבלת במספר. להוספה גדולה של שאלות פנו למנהל המאגר.</p></details>
+<details><summary>אפשר להשתמש בטלפון?</summary><p>כן. בטלפון המסכים מסתדרים בעמודה אחת: עדיף לחפש ולהוסיף שאלות, ולעשות עריכה מורכבת במחשב.</p></details>
+</section>
+<footer>פותח על ידי אורי העליון · המדריך מתעדכן יחד עם האתר</footer>
+</main>
+</body>
+</html>

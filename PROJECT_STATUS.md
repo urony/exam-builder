@@ -110,4 +110,5 @@
 - **תחזוקה:** פעולות GitHub Actions עודכנו ל-Node 24 (`pages.yml` יאומת בפריסה הבאה); מומלץ לצמצם את מפתח ה-API לפי referrer. פירוט: HANDOFF §19.
 
 ## מדיניות פרטיות (06.11.2026)
-- נוסף `public/privacy.html` + קישורים (קומיט `7ab7140`, נדחף ל-main, **לא נפרס עדיין**). נבדק מקומית: RTL, 375/768/שולחן, בלי גלישה אופקית, test:full, release-check, build. פירוט: HANDOFF §20.
+- נוסף `public/privacy.html` + קישורים (קומיט `7ab7140`, נפרס ל-https://exams.uronytools.com/privacy.html). נבדק מקומית: RTL, 375/768/שולחן, בלי גלישה אופקית, test:full, release-check, build. פירוט: HANDOFF §20.
+- מיתוג Google OAuth אומת ופורסם (אורי; דומיין אומת ב-Search Console דרך TXT ב-DNS). התחברות מורה נבדקה על ידי אורי. פירוט: HANDOFF §20.

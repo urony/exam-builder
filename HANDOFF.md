@@ -183,5 +183,6 @@ node C:/dev/tools/ciwait.cjs <sha>
 
 ## 20. מדיניות פרטיות (06.11.2026)
 - נוסף עמוד `public/privacy.html` (יעד: https://exams.uronytools.com/privacy.html), נבנה ממקור `docs/privacy/privacy.src.html` בעזרת `node scripts/build-privacy.mjs` (משבץ Open Sans מתוך המדריך; יש להריץ מחדש אחרי עריכת המקור). קישור "מדיניות פרטיות" בשורת הקרדיט באפליקציה ובכותרת התחתונה של המדריך. קומיט `7ab7140`.
-- **עד כתיבת שורה זו העמוד נדחף ל-main אך לא נפרס**; פריסה דורשת אישור נפרד (Run workflow). אחרי הפריסה: להזין את הכתובת ב-Google Auth Platform ← Branding.
+- **העמוד נפרס** (הרצה #2 של pages.yml מ-`838d1fa`, success; `/privacy.html` מחזיר 200). הרצה זו אימתה גם את פעולות Node 24 המעודכנות ב-pages.yml.
 - שאלות פתוחות שנותרו במדיניות: ניקוי IndexedDB בהתנתקות לא אומת; שארית suggestionMedia אחרי אישור לא אומתה; מחיקה לפי בקשה מטופלת ידנית דרך urony@hotmail.com. לא ייעוץ משפטי.
+- **מיתוג Google OAuth (06.11.2026, בוצע על ידי אורי בקונסולות):** כתובת המדיניות הוזנה ב-Auth Platform ← Branding. הבדיקה הראשונה נכשלה כי הדומיין לא אומת ב-Search Console; נוספה רשומת TXT (`google-site-verification`) בשורש `uronytools.com` ב-DNS של Porkbun (הרשומה הישנה נשארה). המיתוג אומת, אורי לחץ Publish branding, והתחברות מורה באתר הציבורי עובדת. לא נבדק על ידי הסוכן: מצב Audience (In production) וצילום מסך ההסכמה.

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { parsePackage } from '../src/adapter.js';
 
 const dir = process.argv[2] || 'samples';
+if (!fs.existsSync(dir)) { console.log(`דילוג: אין תיקיית ${dir} (חבילות הדוגמה אינן ב-git; רץ רק מקומית)`); process.exit(0); }
 const files = fs.readdirSync(dir).filter(f => f.endsWith('.zip'));
 let fail = 0;
 for (const f of files) {

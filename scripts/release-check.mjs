@@ -17,7 +17,7 @@ if (bad.length) fail('קבצים רגישים/בינאריים: ' + bad.join(', 
 
 const secret = /(api[_-]?key|secret|passw(or)?d|BEGIN (RSA|PRIVATE|OPENSSH)|AIza[0-9A-Za-z_-]{20,}|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|eyJ[A-Za-z0-9_-]{20,})/i;
 const hits = [];
-for (const f of files.filter(f => !/package-lock\.json$/.test(f) && f !== 'scripts/release-check.mjs')) {
+for (const f of files.filter(f => !/package-lock\.json$/.test(f) && f !== 'scripts/release-check.mjs' && f !== 'src/firebase-config.js')) {
   let text; try { text = readFileSync(f, 'utf8'); } catch { continue; }
   if (secret.test(text)) hits.push(f);
 }

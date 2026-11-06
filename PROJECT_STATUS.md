@@ -55,5 +55,11 @@
 - **Drive appData – מסקנות (מתיעוד Google):** `drive.appdata` לא רגיש; נדרש "אימות מותג" בסיסי ולא סקירת אבטחה. דורש דומיין בבעלותנו (github.io אינו ניתן לאימות) – האתר חייב לשבת על `uronytools.com` (תת-דומיין ב-GitHub Pages) + דף בית + מדיניות פרטיות באותו דומיין. פירוט: `docs/architecture.md`.
 - בדיקה לפני commit: `npm run release-check` (בדיקות + build + קבצים רגישים; נכשל = עצירה).
 
+## ענן – הכנה (06.11.2026)
+- הוקמו ע"י המשתמש: Firebase (Spark), Firestore (תל אביב, כללים נעולים), Google Auth, אפליקציית Web, GitHub Pages (Actions) עם `exams.uronytools.com` (DNS עדיין מתעדכן).
+- נוסף בקוד (לא פורסם, לא מחובר לממשק עדיין): `.github/workflows/pages.yml` (בדיקות+build+פריסה, **הרצה ידנית בלבד** עד אישור פרסום), `src/firebase-config.js` (ריק – ממתין לערכים ציבוריים), `src/cloud.js` (התחברות Google + הרשאת drive.appdata, Firestore, נטען עצלתית), `src/drive.js` (לקוח Drive appData), `firestore.rules` (טיוטה, **לא פורסמה**), `firebase.json`.
+- נבדק: `scripts/test-cloud.mjs` – לקוח Drive מול Drive מזויף, ובדיקה סטטית של הכללים. **לא נבדק:** כללים באמולטור (אין Java), Drive אמיתי, התחברות אמיתית, ה-workflow ב-GitHub.
+- הבא: הזנת config, `FirestoreStore`/`DriveStore` מאחורי `store.js`, פרסום כללים אחרי אישור, ואז הרצת ה-workflow.
+
 ## הבא
 אישור המלצת האחסון והגדרת Google -> `DriveStore` + `FirestoreStore` מאחורי `src/store.js`. במקביל בלי ענן: גרירה, פרקים, תוכן חופשי, שימוש קודם.

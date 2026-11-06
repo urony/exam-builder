@@ -70,6 +70,15 @@ assert.equal(rec.authorUid, 'u1'); assert.equal(rec.status, 'pending'); assert.e
 assert.equal((await cs.loadSuggestions()).length, 1);
 assert.deepEqual((await cs.loadBank()).questions, ['local'], 'מאגר מרכזי ריק -> נשאר המאגר המקומי');
 
+// Firestore חוסם הכול (כללים נעולים): התחברות, מבחנים ו-Drive חייבים להמשיך לעבוד
+const denied = Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' });
+const fsDenied = { collection: () => ({}), query: () => ({}), where: () => null, doc: () => ({}), getDocs: async () => { throw denied; }, setDoc: async () => { throw denied; } };
+const cs2 = createCloudStore({ drive, firestore: async () => ({ fs: fsDenied, db: {} }), uid: 'u1', local: localStub });
+assert.deepEqual(await cs2.loadSuggestions(), [], 'הצעות: שגיאת הרשאה לא נזרקת');
+assert.deepEqual((await cs2.loadBank()).questions, ['local'], 'מאגר: שגיאת הרשאה -> fallback מקומי');
+assert.equal((await cs2.loadExams()).length, 1, 'Drive ממשיך לעבוד');
+await assert.rejects(cs2.submitSuggestion({ uid: 'z' }), /permissions/, 'שליחת הצעה כן מדווחת שגיאה (המשתמש צריך לדעת)');
+
 // ---- כללי Firestore: בדיקה סטטית ----
 const rules = fs.readFileSync('firestore.rules', 'utf8');
 assert.ok(!/allow[^;]*:\s*if\s+true/.test(rules), 'אסור allow ... if true');

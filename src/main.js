@@ -54,8 +54,12 @@ async function signInFlow() {
     setBackend(createCloudStore({ drive: createDrive({ getToken: cloud.getDriveToken }), firestore: cloud.firestore, uid: u.uid, local: localStore }));
     S.user = { uid: u.uid, name: u.name, hasDrive: u.hasDrive };
     if (!u.hasDrive) toast('לא ניתנה הרשאת Drive – הנתונים האישיים לא יישמרו בענן');
-    S.exam = null; await loadAll(); render(); toast('מחובר: ' + (u.name || 'משתמש'));
-  } catch (err) { console.error(err); toast('ההתחברות נכשלה: ' + (err.code || err.message)); }
+    S.user = { uid: u.uid, name: u.name, hasDrive: u.hasDrive };
+    S.exam = null;
+    try { await loadAll(); toast('מחובר: ' + (u.name || 'משתמש')); }
+    catch (err) { console.error('loadAll after sign-in:', err); toast('מחובר, אך טעינת הנתונים מ-Drive נכשלה: ' + (err.message || err.code)); S.exam = newExam(); }
+    render();
+  } catch (err) { console.error('sign-in:', err); toast('ההתחברות נכשלה: ' + (err.code || err.message)); }
 }
 async function signOutFlow() {
   try { await (await import('./cloud.js')).signOut(); } catch { /* ignore */ }
@@ -471,7 +475,8 @@ $app.addEventListener('click', async e => {
     const q = S.personal.find(x => x.uid === d.suggest); const credit = document.querySelector('[data-sgcredit="' + CSS.escape(d.suggest) + '"]')?.checked;
     const name = credit ? (prompt('השם שיוצג כקרדיט:', S.exam.teacher || '') || '') : '';
     if (credit && !name) return;
-    await store.submitSuggestion(q, { credit, authorName: name }); S.suggestions = await store.loadSuggestions(); toast('השאלה נשלחה לבדיקה'); return render();
+    try { await store.submitSuggestion(q, { credit, authorName: name }); } catch (err) { console.error(err); return toast(err.code === 'permission-denied' ? 'שליחת הצעות עדיין לא פעילה (כללי הענן טרם הופעלו)' : 'השליחה נכשלה: ' + (err.code || err.message)); }
+    S.suggestions = await store.loadSuggestions(); toast('השאלה נשלחה לבדיקה'); return render();
   }
   if (t.id === 'eqsplit') { equalSplit(S.exam); saveExamSoon(); return render(); }
   if (t.id === 'newexam') { S.exam = newExam(); S.editing.clear(); saveExamSoon(); return render(); }

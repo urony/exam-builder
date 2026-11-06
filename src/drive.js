@@ -10,7 +10,11 @@ export function createDrive({ getToken, fetchImpl = (...a) => fetch(...a) }) {
     return { Authorization: 'Bearer ' + t };
   };
   const ok = async r => {
-    if (!r.ok) { const e = new Error('Drive ' + r.status); e.status = r.status; throw e; }
+    if (!r.ok) {
+      let reason = '';
+      try { const j = await r.json(); reason = j?.error?.errors?.[0]?.reason || j?.error?.message || ''; } catch { /* ללא גוף */ }
+      const e = new Error('Drive ' + r.status + (reason ? ': ' + reason : '')); e.status = r.status; throw e;
+    }
     return r;
   };
 

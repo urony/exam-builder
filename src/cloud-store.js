@@ -47,9 +47,12 @@ export function createCloudStore({ drive, firestore, uid, local }) {
       return rec;
     },
     async loadSuggestions() {
-      const { fs, db } = await firestore();
-      const snap = await fs.getDocs(fs.query(fs.collection(db, 'suggestions'), fs.where('authorUid', '==', uid)));
-      return snap.docs.map(d => d.data());
+      // כללי Firestore עדיין עשויים לחסום (permission-denied): ההצעות הן תוספת, אסור שיכשילו כניסה ושימוש ב-Drive
+      try {
+        const { fs, db } = await firestore();
+        const snap = await fs.getDocs(fs.query(fs.collection(db, 'suggestions'), fs.where('authorUid', '==', uid)));
+        return snap.docs.map(d => d.data());
+      } catch (err) { console.warn('loadSuggestions (Firestore):', err.code || err.message); return []; }
     },
   };
 }

@@ -1,5 +1,5 @@
-// בדיקות בלי רשת: (1) לקוח Drive מול Drive מזויף בזיכרון, (2) בדיקה סטטית של firestore.rules.
-// לא מחליף בדיקת כללים באמולטור Firestore (דורש Java) ולא בדיקה מול Drive אמיתי.
+// בדיקות בלי רשת: (1) לקוח Drive REST מול Drive מזויף, (2) תור שמירה ממתין, חשבון בלי Drive ותקלות רשת.
+// כללי Firestore נבדקים באמולטור אמיתי: test-rules.mjs, test-cloud-emulator.mjs. Drive אמיתי לא נבדק כאן.
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import { createDrive } from '../src/drive.js';
@@ -45,46 +45,92 @@ assert.equal(files.size, 2);
 assert.ok(calls.every(c => c.auth === 'Bearer tok'));
 await assert.rejects(createDrive({ getToken: () => null, fetchImpl: fakeFetch }).list(), /התחברות/);
 
-// ---- cloud-store מעל Drive מזויף + Firestore מזויף ----
-const { createCloudStore } = await import('../src/cloud-store.js');
-files.clear();
-const sugg = new Map();
-const fsFake = {
-  collection: (_, n) => ({ n }), doc: (_, c, id) => ({ c, id }), where: () => null, query: c => c,
-  setDoc: async (r, v) => { sugg.set(r.id, v); },
-  getDocs: async c => ({ docs: c.n === 'bank' ? [] : [...sugg.values()].map(v => ({ data: () => v })) }),
-};
-const localStub = { async loadBank() { return { packages: [], questions: ['local'], cases: [], media: new Map() }; }, async loadTaxonomy() { return {}; } };
-const cs = createCloudStore({ drive, firestore: async () => ({ fs: fsFake, db: {} }), uid: 'u1', local: localStub });
-await cs.saveExam({ id: 'e1', title: 'א', updatedAt: 1, items: [] });
-await cs.saveExam({ id: 'e2', title: 'ב', updatedAt: 2, items: [] });
-assert.deepEqual((await cs.loadExams()).map(e => e.id), ['e2', 'e1']);
-await cs.deleteExam('e1');
-assert.equal((await cs.loadExams()).length, 1);
-await cs.savePersonalQuestion({ uid: 'p1', body: 'x' });
-assert.equal((await cs.loadPersonal())[0].uid, 'p1');
-await cs.putMedia('user/abc', new Uint8Array([0x89, 1, 2]));
-assert.deepEqual([...await cs.getMedia('user/abc')], [0x89, 1, 2]);
-const rec = await cs.submitSuggestion({ uid: 'p1', body: 'x' }, { credit: false, authorName: 'שם' });
-assert.equal(rec.authorUid, 'u1'); assert.equal(rec.status, 'pending'); assert.equal(rec.authorName, '');
-assert.equal((await cs.loadSuggestions()).length, 1);
-assert.deepEqual((await cs.loadBank()).questions, ['local'], 'מאגר מרכזי ריק -> נשאר המאגר המקומי');
+// ---- תור שמירה ממתין, חשבון בלי Drive, תקלות רשת (בלי Firestore) ----
+import { createCloudStore } from '../src/cloud-store.js';
+import { createMemStore } from '../src/outbox.js';
+import { memDrive, localStub } from './helpers.mjs';
+const noFs = async () => { throw Object.assign(new Error('offline'), { code: 'unavailable' }); };
+const mkStore = (o = {}) => { const d = memDrive(), ob = createMemStore(), errs = []; const s = createCloudStore({ drive: d, firestore: noFs, uid: 'u1', local: localStub(), outbox: ob, onSyncError: e => errs.push(e), ...o }); return { s, d, ob, errs }; };
+const exam = (id, t, u) => ({ id, title: t, updatedAt: u, items: [] });
 
-// Firestore חוסם הכול (כללים נעולים): התחברות, מבחנים ו-Drive חייבים להמשיך לעבוד
-const denied = Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' });
-const fsDenied = { collection: () => ({}), query: () => ({}), where: () => null, doc: () => ({}), getDocs: async () => { throw denied; }, setDoc: async () => { throw denied; } };
-const cs2 = createCloudStore({ drive, firestore: async () => ({ fs: fsDenied, db: {} }), uid: 'u1', local: localStub });
-assert.deepEqual(await cs2.loadSuggestions(), [], 'הצעות: שגיאת הרשאה לא נזרקת');
-assert.deepEqual((await cs2.loadBank()).questions, ['local'], 'מאגר: שגיאת הרשאה -> fallback מקומי');
-assert.equal((await cs2.loadExams()).length, 1, 'Drive ממשיך לעבוד');
-await assert.rejects(cs2.submitSuggestion({ uid: 'z' }), /permissions/, 'שליחת הצעה כן מדווחת שגיאה (המשתמש צריך לדעת)');
+{ // רגיל: נשמר ב-Drive, התור ריק
+  const { s, d, ob } = mkStore();
+  await s.saveExam(exam('e1', 'א', 1)); await s.saveExam(exam('e2', 'ב', 2));
+  assert.deepEqual((await s.loadExams()).map(e => e.id), ['e2', 'e1']);
+  assert.equal((await ob.keys()).length, 0, 'התור ריק אחרי הצלחה');
+  await s.deleteExam('e1'); assert.equal((await s.loadExams()).length, 1);
+  await s.savePersonalQuestion({ uid: 'p1', body: 'x' }); assert.equal((await s.loadPersonal())[0].uid, 'p1');
+  await s.putMedia('user/abc', new Uint8Array([0x89, 1, 2])); assert.deepEqual([...await s.getMedia('user/abc')], [0x89, 1, 2]);
+  assert.ok(d.files.has('exam-e2.json') && !d.files.has('exam-e1.json'));
+}
+{ // נפילת רשת בשמירה: הנתונים לא אובדים, השגיאה גלויה, והסנכרון מושלם בהמשך
+  const { s, d, ob } = mkStore();
+  d.fail = {};  // רשת נפלה
+  await assert.rejects(s.saveExam(exam('e9', 'חשוב', 5)), e => e.code === 'sync-pending');
+  assert.equal((await ob.keys()).length, 1, 'המבחן נשמר בתור במחשב');
+  assert.equal((await s.loadExams()).find(e => e.id === 'e9')?.title, 'חשוב', 'המבחן עדיין מוצג ונטען (מהתור), גם בלי רשת');
+  await assert.rejects(s.savePersonalQuestion({ uid: 'p9', body: 'שאלה' }), e => e.code === 'sync-pending');
+  await assert.rejects(s.putMedia('user/img9', new Uint8Array([0x89, 9])), e => e.code === 'sync-pending');
+  assert.equal((await s.pendingCount()), 3);
+  d.fail = null;  // הרשת חזרה
+  const r = await s.flush(); assert.deepEqual(r, { pending: 0, failed: 0 });
+  assert.ok(d.files.has('exam-e9.json') && d.files.has('pq-p9.json') && d.files.has(mediaKey('user/img9')), 'הכול הגיע ל-Drive');
+}
+function mediaKey(k) { return 'img-' + k.replace(/[^\w.-]/g, '_'); }
+{ // אין גישת קריאה ל-Drive (נפל בטעינה) ויש מבחן בתור: לא מאבדים אותו
+  const { s, d, ob } = mkStore();
+  d.fail = { status: 503 };
+  await assert.rejects(s.saveExam(exam('e5', 'בתור', 3)), e => e.code === 'sync-pending');
+  const list = await s.loadExams();
+  assert.equal(list.length, 1); assert.equal(list[0].id, 'e5');
+}
+{ // שגיאת קריאה מלאה ובלי תור: השגיאה מוצגת (לא מאגר ריק שקט)
+  const { s, d } = mkStore(); d.fail = { status: 403 };
+  await assert.rejects(s.loadExams(), /Drive 403/);
+}
+{ // מחיקה בזמן תקלה לא מחזירה את המבחן, ולא נשמרת מחיקה שקרית
+  const { s, d } = mkStore();
+  await s.saveExam(exam('e7', 'למחיקה', 1));
+  d.fail = {}; await assert.rejects(s.deleteExam('e7'), e => e.code === 'sync-pending');
+  await assert.rejects(s.loadExams(), /Drive/, 'בלי רשת ובלי תור: שגיאה גלויה, לא רשימה ריקה שקרית');
+  d.fail = null; await s.flush(); assert.ok(!d.files.has('exam-e7.json'));
+  assert.equal((await s.loadExams()).length, 0, 'אחרי חזרת הרשת המחיקה הושלמה');
+}
+{ // פעולה חלקית: שמירה שנכשלה באמצע לא דורסת גרסה חדשה יותר בענן
+  const { s, d, ob } = mkStore();
+  await s.saveExam(exam('e8', 'ישן', 10));
+  await ob.put('exam:e8', exam('e8', 'ישן יותר ממתין', 5));        // שארית ישנה בתור
+  const list = await s.loadExams();
+  assert.equal(list.find(e => e.id === 'e8').title, 'ישן', 'גרסה ישנה מהתור לא דורסת גרסה חדשה יותר בענן');
+  assert.equal(JSON.parse(d.files.get('exam-e8.json')).title, 'ישן');
+  assert.equal((await ob.keys()).length, 0, 'התור התנקה');
+}
+{ // חשבון בלי הרשאת Drive: אישי נשאר מקומי (ולא נשלח לענן), מאגר/הצעות לא תלויים ב-Drive
+  const { s, d } = mkStore({ driveEnabled: false });
+  await s.saveExam(exam('l1', 'מקומי', 1)); await s.savePersonalQuestion({ uid: 'lp', body: 'x' }); await s.putMedia('user/z', new Uint8Array([1]));
+  assert.equal(d.calls, 0, 'אין קריאות ל-Drive');
+  assert.equal(s.kind, 'cloud-bank-local-personal');
+  assert.equal((await s.loadExams())[0].id, 'l1'); assert.equal((await s.loadPersonal())[0].uid, 'lp');
+  assert.deepEqual(await s.flush(), { pending: 0, failed: 0 });
+}
+{ // אסימון Drive פג (401): שמירה מדווחת וממתינה; לא נזרקת שגיאה גולמית ולא נמחק כלום
+  const { s, d, ob } = mkStore(); d.fail = { status: 401 };
+  await assert.rejects(s.saveExam(exam('e3', 'x', 1)), e => e.code === 'sync-pending' && e.cause.status === 401);
+  assert.equal((await ob.keys()).length, 1);
+}
+{ // מנהל: פעולת מנהל בלי הרשאה נחסמת כבר בלקוח (נוחות; האכיפה האמיתית בכללי Firestore)
+  const { s } = mkStore();
+  await assert.rejects(s.saveBankQuestion({ uid: 'x' }), e => e.code === 'not-admin');
+  await assert.rejects(s.importPackage({}, {}), e => e.code === 'not-admin');
+}
+{ // קריאת מאגר נכשלת: חוזרים למאגר המקומי עם אזהרה גלויה
+  const { s } = mkStore(); const b = await s.loadBank();
+  assert.equal(b.questions[0].uid, 'local-q'); assert.match(b.warning, /אינו זמין/);
+  assert.deepEqual(await s.loadSuggestions(), []);
+}
 
-// ---- כללי Firestore: בדיקה סטטית ----
+// ---- כללי Firestore: בדיקה סטטית (בנוסף לאמולטור) ----
 const rules = fs.readFileSync('firestore.rules', 'utf8');
 assert.ok(!/allow[^;]*:\s*if\s+true/.test(rules), 'אסור allow ... if true');
 assert.match(rules, /match \/\{document=\*\*\}\s*\{\s*allow read, write: if false;/, 'חייב כלל סגירה כללי');
-assert.match(rules, /match \/bank\/\{docId\}[\s\S]*allow write: if isAdmin\(\)/, 'כתיבה למאגר רק למנהל');
-assert.match(rules, /match \/admins\/\{uid\}[\s\S]*allow list, write: if false/, 'אין כתיבה/רשימה למסמכי מנהל');
-assert.match(rules, /authorUid == request\.auth\.uid/, 'הצעה רק על שם המחובר');
-assert.match(rules, /allow update, delete: if isAdmin\(\)/, 'עדכון הצעות רק למנהל');
-console.log('test-cloud: OK (Drive מזויף + בדיקה סטטית של כללים; לא אמולטור)');
+console.log('test-cloud: OK');

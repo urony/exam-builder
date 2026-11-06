@@ -24,6 +24,7 @@ export const localStore = {
   saveExam: exam => db.put('exams', JSON.parse(JSON.stringify(exam))),
   deleteExam: id => db.del('exams', id),
   putMedia: (key, data) => db.put('media', { key, data }),
+  async getMedia(key) { return (await db.getOne('media', key))?.data || null; },
   loadPersonal: () => db.getAll('personal'),
   savePersonalQuestion: q => db.put('personal', JSON.parse(JSON.stringify(q))),
   deletePersonalQuestion: uid => db.del('personal', uid),

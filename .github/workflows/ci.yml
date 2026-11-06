@@ -1,0 +1,34 @@
+name: CI (tests only, no deploy)
+
+# בדיקות בלבד: אין פרסום ואין גישה לשירותי ענן אמיתיים.
+# כללי האבטחה נבדקים באמולטור Firestore מקומי (פרויקט demo-exam), לא מול הפרויקט האמיתי.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci
+      # npm test כולל: בדיקות מתאם/בטיחות/מבנה/אישי/ענן + כללי Firestore + אינטגרציה מול האמולטור
+      - run: npx --yes firebase-tools@latest emulators:exec --only firestore --project demo-exam "npm test"
+      - run: npm run build
+      - name: Check built paths work on a custom domain root
+        run: |
+          grep -q 'src="./assets/' dist/index.html
+          ! grep -q 'src="/exam-builder' dist/index.html

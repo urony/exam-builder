@@ -1,38 +1,73 @@
 rules_version = '2';
 
-// כללי Firestore (טיוטה לבדיקה – לא פורסמו לפרויקט).
-// עיקרון: ברירת מחדל סגורה. מורה מחובר קורא את המאגר המרכזי ומציע שאלות; רק מנהל כותב למאגר.
-// מנהל = קיים מסמך admins/{uid}. המסמך נוצר ידנית בקונסולה; אף לקוח לא יכול לכתוב אליו.
+// כללי Firestore (לא פורסמו לפרויקט – בדיקה באמולטור בלבד עד אישור).
+// עיקרון: ברירת מחדל סגורה.
+//  - מורה מחובר: קורא את המאגר המרכזי, יוצר הצעות על שמו בלבד (בסטטוס pending), קורא רק את ההצעות שלו.
+//  - מנהל: קיים מסמך admins/{uid} (נוצר ידנית בקונסולה; אף לקוח לא יכול לכתוב אליו). רק מנהל כותב למאגר, מעדכן הצעות וכותב יומן ביקורת.
 service cloud.firestore {
   match /databases/{database}/documents {
 
     function signedIn() {
-      return request.auth != null;
+      return request.auth != null
+        && request.auth.token.firebase.sign_in_provider == 'google.com';
     }
 
     function isAdmin() {
       return signedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
     }
 
-    // הרשאת מנהל: משתמש יכול לבדוק רק את המסמך של עצמו. כתיבה אסורה.
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    // הרשאת מנהל: משתמש יכול לבדוק רק את המסמך של עצמו. כתיבה ורשימה אסורות לכולם.
     match /admins/{uid} {
-      allow get: if signedIn() && request.auth.uid == uid;
+      allow get: if isOwner(uid);
       allow list, write: if false;
     }
 
-    // המאגר המרכזי (חבילות נתונים של שאלות, סיפורי מקרה, סיווגים, איורים): קריאה למחוברים, כתיבה למנהל.
+    // המאגר המרכזי: מסמך meta, חבילות שאלות וסיפורי מקרה. קריאה למחוברים, כתיבה למנהל בלבד.
     match /bank/{docId} {
       allow read: if signedIn();
       allow write: if isAdmin();
     }
 
-    // הצעות שאלות: המורה יוצר הצעה על שמו בלבד, בסטטוס pending, וקורא רק את שלו; המנהל קורא ומעדכן הכול.
+    // איורי המאגר המרכזי (חלקים עד ~800KB).
+    match /bankMedia/{docId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    // הצעות שאלות. יצירה: הבעלים בלבד, סטטוס pending בלבד, ללא שדות מיותרים.
+    // קריאה: הבעלים או מנהל. עדכון/מחיקה (אישור, דחייה): מנהל בלבד. מורה לא יכול לשנות הצעה אחרי שליחתה.
     match /suggestions/{id} {
-      allow create: if signedIn()
-        && request.resource.data.authorUid == request.auth.uid
-        && request.resource.data.status == 'pending';
+      allow create: if isOwner(request.resource.data.authorUid)
+        && request.resource.data.keys().hasOnly(['id', 'status', 'authorUid', 'credit', 'authorName', 'submittedAt', 'questionJson', 'imageKeys', 'mediaTag'])
+        && request.resource.data.keys().hasAll(['id', 'status', 'authorUid', 'credit', 'authorName', 'submittedAt', 'questionJson'])
+        && request.resource.data.id == id
+        && request.resource.data.status == 'pending'
+        && request.resource.data.credit is bool
+        && request.resource.data.authorName is string && request.resource.data.authorName.size() <= 100
+        && request.resource.data.questionJson is string && request.resource.data.questionJson.size() <= 900000
+        && (!('imageKeys' in request.resource.data) || (request.resource.data.imageKeys is list && request.resource.data.imageKeys.size() <= 20));
       allow get, list: if signedIn() && (resource.data.authorUid == request.auth.uid || isAdmin());
       allow update, delete: if isAdmin();
+    }
+
+    // תמונות של הצעות (המנהל לא יכול לקרוא Drive של מורה, לכן המורה שולח עותק של התמונה עם ההצעה).
+    match /suggestionMedia/{id} {
+      allow create: if isOwner(request.resource.data.authorUid)
+        && request.resource.data.keys().hasOnly(['sgId', 'authorUid', 'key', 'part', 'parts', 'data', 'tag'])
+        && request.resource.data.data is bytes && request.resource.data.data.size() <= 900000;
+      allow get, list: if signedIn() && (resource.data.authorUid == request.auth.uid || isAdmin());
+      allow update, delete: if isAdmin();
+    }
+
+    // יומן ביקורת של פעולות מנהל: יצירה בלבד, ללא עדכון/מחיקה.
+    match /audit/{id} {
+      allow create: if isAdmin() && request.resource.data.by == request.auth.uid;
+      allow read: if isAdmin();
+      allow update, delete: if false;
     }
 
     // כל השאר סגור.

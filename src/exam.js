@@ -10,6 +10,38 @@ export function newExam() {
   };
 }
 
+// פריטי מבחן: שאלה (ברירת מחדל), כותרת פרק/תת-פרק {type:'chapter', level:1|2, title}, או טקסט חופשי {type:'free', text}
+export const isQ = it => !it.type || it.type === 'question';
+export const questionsOf = exam => exam.items.filter(isQ);
+export const qNumber = (exam, id) => { let n = 0; for (const it of exam.items) { if (isQ(it)) n++; if (it.id === id) return n; } return 0; };
+
+export function addChapter(exam, level = 1, title = '') {
+  const it = { id: uid(), type: 'chapter', level: level === 2 ? 2 : 1, title, pageBreak: false };
+  exam.items.push(it); exam.updatedAt = Date.now(); return it;
+}
+export function addFree(exam, text = '') {
+  const it = { id: uid(), type: 'free', text };
+  exam.items.push(it); exam.updatedAt = Date.now(); return it;
+}
+
+// קטע שנעים יחד: כותרת פרק + כל מה שאחריה עד פרק באותה רמה או גבוהה יותר; פריט אחר = הוא לבדו
+export function sectionRange(exam, id) {
+  const i = exam.items.findIndex(x => x.id === id); if (i < 0) return null;
+  const it = exam.items[i]; let j = i + 1;
+  if (it.type === 'chapter') while (j < exam.items.length && !(exam.items[j].type === 'chapter' && exam.items[j].level <= it.level)) j++;
+  return [i, j];
+}
+// העברת קטע לפני/אחרי פריט יעד (גרירה). פרק נגרר יחד עם תוכנו. יעד בתוך הקטע = ללא שינוי.
+export function moveTo(exam, id, targetId, after = false) {
+  const r = sectionRange(exam, id); const t = exam.items.findIndex(x => x.id === targetId);
+  if (!r || t < 0 || (t >= r[0] && t < r[1])) return false;
+  const block = exam.items.splice(r[0], r[1] - r[0]);
+  let at = exam.items.findIndex(x => x.id === targetId); if (at < 0) { exam.items.splice(r[0], 0, ...block); return false; }
+  // אחרי כותרת פרק: שאלה/טקסט נכנסים לתוך הפרק (מיד אחרי הכותרת); פרק נגרר ממוקם אחרי הפרק היעד כולו
+  if (after) { const tgt = exam.items[at]; if (tgt.type === 'chapter' && block[0].type === 'chapter') { const tr = sectionRange(exam, targetId); at = tr[1]; } else at += 1; }
+  exam.items.splice(at, 0, ...block); exam.updatedAt = Date.now(); return true;
+}
+
 export const isChoiceQuestion = blocks => blocks.some(b => b.type === 'choice');
 
 export function itemFromQuestion(q) {
@@ -42,14 +74,14 @@ export function addQuestion(exam, q, caseStudy) {
 }
 
 export function totalPoints(exam) {
-  return exam.items.reduce((a, it) => a + (Number(it.points) || 0), 0);
+  return questionsOf(exam).reduce((a, it) => a + (Number(it.points) || 0), 0);
 }
 
 export function removeItem(exam, id) {
   exam.items = exam.items.filter(i => i.id !== id);
   // סיפור מקרה שאין עוד שאלה שמשתמשת בו -> מוסר
   for (const cid of Object.keys(exam.cases)) {
-    if (!exam.items.some(i => i.snap.caseStudyId === cid)) delete exam.cases[cid];
+    if (!exam.items.some(i => i.snap?.caseStudyId === cid)) delete exam.cases[cid];
   }
   exam.updatedAt = Date.now();
 }
@@ -63,11 +95,11 @@ export function moveItem(exam, id, delta) {
 }
 
 export function equalSplit(exam) {
-  const n = exam.items.length;
+  const qs = questionsOf(exam), n = qs.length;
   if (!n) return;
   const base = Math.floor(exam.targetPoints / n);
   let rest = exam.targetPoints - base * n;
-  exam.items.forEach((it, idx) => { it.points = base + (idx >= n - rest ? 1 : 0); });
+  qs.forEach((it, idx) => { it.points = base + (idx >= n - rest ? 1 : 0); });
   exam.updatedAt = Date.now();
 }
 
@@ -75,7 +107,7 @@ export function equalSplit(exam) {
 export function caseFirstUse(exam) {
   const seen = new Set(); const map = new Map();
   for (const it of exam.items) {
-    const c = it.snap.caseStudyId;
+    const c = it.snap?.caseStudyId;
     if (c && !seen.has(c) && exam.cases[c]?.include) { seen.add(c); map.set(it.id, c); }
   }
   return map;

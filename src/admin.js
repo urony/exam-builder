@@ -34,7 +34,7 @@ export function createAdmin(ctx) {
 
   // ---------- מסכים ----------
   function view() {
-    return `<div class="adm-banner">מצב ניהול מקומי – אין כאן הרשאות אמיתיות. הרשאות מנהל ייאכפו בשירות הנתונים לאחר חיבורו.</div>
+    return `<div class="adm-banner">${S.user ? 'מחובר כמנהל. השינויים נשמרים במאגר המרכזי בענן (הרשאה נאכפת בשרת) ונרשמים ביומן פעולות מנהל.' : 'מצב ניהול מקומי – אין כאן הרשאות אמיתיות. הרשאות מנהל נאכפות רק כשמחוברים כמנהל לענן.'}</div>
     <div class="subtabs">${SUBS.map(([k, t]) => `<button data-adm="sub:${k}" class="${A.sub === k ? 'on' : ''}">${t}${k === 'suggestions' && stat().pending ? ` <span class="badge warn">${stat().pending}</span>` : ''}</button>`).join('')}</div>
     ${A.sub === 'home' ? home() : A.sub === 'import' ? importV() : A.sub === 'questions' ? questionsV() : A.sub === 'suggestions' ? suggestionsV() : A.sub === 'taxonomy' ? taxonomyV() : backupV()}`;
   }

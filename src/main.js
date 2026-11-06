@@ -2,7 +2,9 @@ import { parsePackage, KIND_LABEL } from './adapter.js';
 import { cellLines } from './clean.js';
 import { store, localStore, setBackend } from './store.js';
 import { cloudConfigured } from './firebase-config.js';
-import { newExam, uid, addQuestion, totalPoints, removeItem, moveItem, equalSplit, isChoiceQuestion, caseFirstUse } from './exam.js';
+import * as idb from './db.js';
+import { createIdbStore } from './outbox.js';
+import { newExam, uid, addQuestion, totalPoints, isQ, questionsOf, qNumber, addChapter, addFree, moveTo, removeItem, moveItem, equalSplit, isChoiceQuestion, caseFirstUse } from './exam.js';
 import { buildExamDocument, toBlob } from './docx-export.js';
 import { prepareImage } from './images.js';
 import { createAdmin } from './admin.js';
@@ -21,6 +23,7 @@ const S = {
   exam: null, exams: [], editing: new Set(),
   importReports: [], personal: [], suggestions: [], pq: null,
   user: null, // { uid, name } אחרי התחברות Google; null = מצב מקומי
+  isAdmin: false, warn: '', sync: null, mediaMissing: new Set(),
 };
 const $app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -29,20 +32,60 @@ function toast(msg) { const t = document.getElementById('toast'); t.textContent 
 // ---------- טעינה ----------
 async function loadAll() {
   const bank = await store.loadBank();
+  S.warn = bank.warning || '';
   S.packages = bank.packages; S.questions = bank.questions; S.media = bank.media;
   S.cases = new Map(bank.cases.map(c => [c.uid, c]));
   S.exams = await store.loadExams();
-  S.personal = await store.loadPersonal(); S.suggestions = await store.loadSuggestions();
+  S.personal = await store.loadPersonal();
+  S.suggestions = await store.loadSuggestions();
   S.questions = bank.questions.concat(S.personal);
   S.tax = { types: {}, domains: {} };
-  for (const p of S.packages) { Object.assign(S.tax.types, p.taxonomy.types); Object.assign(S.tax.domains, p.taxonomy.domains); }
-  const meta = await store.loadTaxonomy(); Object.assign(S.tax.domains, meta.domains || {}); Object.assign(S.tax.types, meta.types || {});
+  for (const p of S.packages) { Object.assign(S.tax.types, p.taxonomy?.types || {}); Object.assign(S.tax.domains, p.taxonomy?.domains || {}); }
+  let meta = {}; try { meta = await store.loadTaxonomy(); } catch { /* מאגר מרכזי לא זמין: מילון מהחבילות בלבד */ }
+  Object.assign(S.tax.domains, meta.domains || {}); Object.assign(S.tax.types, meta.types || {});
   if (!S.exam) S.exam = S.exams[0] || newExam();
-  // בענן תמונות משתמש נמצאות ב-Drive: טוענים את אלה שהמבחנים והשאלות האישיות מפנים אליהן
-  if (store.getMedia) {
-    const keys = new Set([...S.exams.flatMap(x => x.items.flatMap(i => (i.images || []).map(m => m.key))), ...S.personal.flatMap(q => (q.images || []).map(m => m.key))]);
-    for (const k of keys) if (k && !S.media.has(k)) { try { const b = await store.getMedia(k); if (b) S.media.set(k, b); } catch { /* תמונה חסרה */ } }
+  // תמונות משתמש (Drive) נטענות כאן; איורי המאגר המרכזי נטענים לפי צורך (ensureMedia)
+  if (store.getMedia) await ensureMedia([...S.exams.flatMap(x => x.items.flatMap(i => (i.images || []).map(m => m.key))), ...S.personal.flatMap(q => (q.images || []).map(m => m.key))].filter(k => String(k).startsWith('user/')));
+  // מנהל: תמונות של הצעות ממתינות (נשלחו עם ההצעה; אין למנהל גישה ל-Drive של המורה)
+  if (S.isAdmin && store.getSuggestionMedia) {
+    for (const s of S.suggestions.filter(x => x.status === 'pending' || x.status === 'in-review')) {
+      if ((s.imageKeys || []).every(k => S.media.has(k))) continue;
+      try { for (const [k, v] of await store.getSuggestionMedia(s)) S.media.set(k, v); } catch (e) { reportSync('הצעות', e); }
+    }
   }
+}
+
+// ---------- מדיה לפי צורך ----------
+async function ensureMedia(keys) {
+  await Promise.all([...new Set(keys)].filter(k => k && !S.media.has(k) && !S.mediaMissing.has(k)).map(async k => {
+    try { const b = await store.getMedia(k); if (b) S.media.set(k, b); else S.mediaMissing.add(k); } catch (e) { S.mediaMissing.add(k); reportSync('תמונה', e); }
+  }));
+}
+const examMediaKeys = ex => ex.items.flatMap(i => [...(i.snap?.blocks || []).map(b => b.mediaKey), ...(i.snap?.rubric?.answer || []).map(b => b.mediaKey), ...(i.images || []).map(m => m.key)])
+  .concat(Object.values(ex.cases || {}).flatMap(c => (c.blocks || []).map(b => b.mediaKey))).filter(Boolean);
+const wantedMedia = new Set(); let mediaTimer;
+function queueMedia(key) {
+  if (!store.getMedia || wantedMedia.has(key) || S.mediaMissing.has(key)) return;
+  wantedMedia.add(key); clearTimeout(mediaTimer);
+  mediaTimer = setTimeout(async () => { const keys = [...wantedMedia]; wantedMedia.clear(); await ensureMedia(keys); if (keys.some(k => S.media.has(k))) render(); }, 60);
+}
+async function putUserMedia(key, data) {
+  S.media.set(key, data);
+  try { await store.putMedia(key, data); } catch (e) { if (e.code === 'sync-pending') reportSync('תמונה', e); else throw e; }
+}
+
+// ---------- סנכרון / אזהרות (לא מטשטשים שגיאות) ----------
+function reportSync(what, err) {
+  console.warn('sync:', what, err);
+  const st = err?.cause?.status ?? err?.status;
+  S.sync = { msg: err?.code === 'sync-pending' ? 'השמירה בענן נכשלה. הנתונים נשמרו במחשב וימתינו לסנכרון.' : `בעיית סנכרון (${what}): ${err?.code || err?.message || err}`, relogin: st === 401 || st === 403 };
+  if (document.getElementById('app')) { const b = document.getElementById('syncbar'); if (b) b.outerHTML = syncBarHtml(); else render(); }
+}
+const syncBarHtml = () => `<div id="syncbar">${S.sync ? `<div class="warnbar">${esc(S.sync.msg)} ${S.sync.relogin ? '<button class="btn sm" id="signin">התחבר מחדש</button>' : '<button class="btn sm" id="retrysync">נסה שוב</button>'}</div>` : ''}${S.warn ? `<div class="warnbar">${esc(S.warn)}</div>` : ''}${S.user && !S.user.hasDrive ? '<div class="warnbar">לא ניתנה הרשאת Drive: מבחנים ושאלות אישיות נשמרים במחשב הזה בלבד ולא בענן.</div>' : ''}</div>`;
+async function retrySync() {
+  if (!store.flush) return;
+  try { const r = await store.flush(); if (!r.pending) { S.sync = null; toast('הסנכרון הושלם'); } else toast(`${r.pending} פריטים עדיין ממתינים לסנכרון`); } catch (e) { reportSync('סנכרון', e); }
+  render();
 }
 
 async function signInFlow() {
@@ -51,25 +94,28 @@ async function signInFlow() {
     const u = await cloud.signIn();
     const { createDrive } = await import('./drive.js');
     const { createCloudStore } = await import('./cloud-store.js');
-    setBackend(createCloudStore({ drive: createDrive({ getToken: cloud.getDriveToken }), firestore: cloud.firestore, uid: u.uid, local: localStore }));
-    S.user = { uid: u.uid, name: u.name, hasDrive: u.hasDrive };
-    if (!u.hasDrive) toast('לא ניתנה הרשאת Drive – הנתונים האישיים לא יישמרו בענן');
-    S.user = { uid: u.uid, name: u.name, hasDrive: u.hasDrive };
-    S.exam = null;
-    try { await loadAll(); toast('מחובר: ' + (u.name || 'משתמש')); }
-    catch (err) { console.error('loadAll after sign-in:', err); toast('מחובר, אך טעינת הנתונים מ-Drive נכשלה: ' + (err.message || err.code)); S.exam = newExam(); }
+    const admin = await cloud.isAdmin();
+    setBackend(createCloudStore({
+      drive: createDrive({ getToken: cloud.getDriveToken }), firestore: cloud.firestore, uid: u.uid, isAdmin: admin, local: localStore,
+      outbox: createIdbStore(idb, `ob:${u.uid}:`), mediaCache: createIdbStore(idb, 'mc:'), driveEnabled: u.hasDrive,
+      onSyncError: e => reportSync(e.where, e.error),
+    }));
+    S.user = { uid: u.uid, name: u.name, hasDrive: u.hasDrive }; S.isAdmin = admin; S.sync = null; S.exam = null; S.mediaMissing.clear();
+    try { await loadAll(); toast('מחובר: ' + (u.name || 'משתמש') + (admin ? ' (מנהל)' : '')); }
+    catch (err) { console.error('loadAll after sign-in:', err); reportSync('טעינה', err); S.exam = newExam(); }
     render();
   } catch (err) { console.error('sign-in:', err); toast('ההתחברות נכשלה: ' + (err.code || err.message)); }
 }
 async function signOutFlow() {
   try { await (await import('./cloud.js')).signOut(); } catch { /* ignore */ }
-  setBackend(localStore); S.user = null; S.exam = null; await loadAll(); render();
+  setBackend(localStore); S.user = null; S.isAdmin = false; S.sync = null; S.warn = ''; S.exam = null; S.media = new Map(); await loadAll(); render();
 }
+
 const qByUid = uid => S.questions.find(q => q.uid === uid);
 const vis = () => S.questions.filter(q => q.published !== false); // שאלות מוסתרות לא מוצגות למורים
 const label = (map, k) => S.tax[map][k] || k || '—';
 const mediaUrl = key => {
-  if (!S.urls.has(key)) { const u8 = S.media.get(key); if (!u8) return ''; S.urls.set(key, URL.createObjectURL(new Blob([u8], { type: u8[0] === 0x89 ? 'image/png' : 'image/jpeg' }))); }
+  if (!S.urls.has(key)) { const u8 = S.media.get(key); if (!u8) { queueMedia(key); return ''; } S.urls.set(key, URL.createObjectURL(new Blob([u8], { type: u8[0] === 0x89 ? 'image/png' : 'image/jpeg' }))); }
   return S.urls.get(key);
 };
 
@@ -79,9 +125,16 @@ function saveExamSoon() {
   clearTimeout(saveTimer);
   const ind = document.getElementById('saveind'); if (ind) ind.textContent = 'שומר…';
   saveTimer = setTimeout(async () => {
-    await store.saveExam(S.exam);
-    S.exams = await store.loadExams();
-    const i2 = document.getElementById('saveind'); if (i2) i2.textContent = 'נשמר ✓';
+    const i2 = () => document.getElementById('saveind');
+    try {
+      await store.saveExam(S.exam);
+      if (S.sync?.msg?.startsWith('השמירה בענן')) S.sync = null;
+      S.exams = await store.loadExams();
+      if (i2()) i2().textContent = 'נשמר ✓';
+    } catch (e) {
+      if (e.code === 'sync-pending') { if (i2()) i2().textContent = 'נשמר במחשב בלבד – ממתין לענן'; reportSync('מבחן', e); }
+      else { if (i2()) i2().textContent = 'השמירה נכשלה'; toast('השמירה נכשלה: ' + (e.code || e.message)); console.error(e); }
+    }
   }, 350);
 }
 
@@ -143,6 +196,7 @@ const badgesOf = q => [
 
 // ---------- מסכים ----------
 function render() {
+  if (S.tab === 'admin' && S.user && !S.isAdmin) S.tab = 'work';
   const e = S.exam;
   const modes = [['search', 'חיפוש'], ['split', 'משולב'], ['exam', 'מבחן']];
   $app.innerHTML = `
@@ -151,14 +205,16 @@ function render() {
     <nav class="tabs">
       <button data-tab="work" class="${S.tab === 'work' ? 'on' : ''}">בניית מבחן</button>
       <button data-tab="personal" class="${S.tab === 'personal' ? 'on' : ''}">המאגר האישי</button>
-      <button data-tab="admin" class="${S.tab === 'admin' ? 'on' : ''}">ניהול (מקומי)</button>
+      ${!S.user || S.isAdmin ? `<button data-tab="admin" class="${S.tab === 'admin' ? 'on' : ''}">${S.user ? 'ניהול' : 'ניהול (מקומי)'}</button>` : ''}
     </nav>
     ${S.tab === 'work' ? `<div class="seg" role="group" aria-label="מצב תצוגה">${modes.map(([k, t]) => `<button data-mode="${k}" class="${S.mode === k ? 'on' : ''}">${t}</button>`).join('')}</div>` : ''}
     <span class="spacer"></span>
     ${cloudConfigured() ? (S.user ? `<span class="pill">${esc(S.user.name || 'מחובר')}</span><button class="btn sm" id="signout">התנתק</button>` : '<button class="btn sm" id="signin">התחברות עם Google</button>') : ''}
-    <span class="pill" id="pill">${e.items.length} שאלות במבחן · ${totalPoints(e)} נק׳</span>
+    <span class="pill" id="pill">${questionsOf(e).length} שאלות במבחן · ${totalPoints(e)} נק׳</span>
   </header>
+  ${syncBarHtml()}
   <main class="${S.tab === 'work' ? 'm-' + S.mode : ''}">${S.tab === 'work' ? workView() : S.tab === 'personal' ? personalView() : adminView()}</main>
+  <footer class="credit">פותח על ידי אורי העליון</footer>
   ${S.modal && qByUid(S.modal) ? `<div class="modal" data-closemodal><div class="modalbox card"><button class="btn sm" data-closemodal style="float:inline-end">סגור ✕</button>${detailHtml(qByUid(S.modal))}</div></div>` : ''}`;
   requestAnimationFrame(() => {
     const p = document.getElementById('paper'); if (!p) return;
@@ -224,7 +280,11 @@ function paper() {
   if (e.instructions) h += `<div class="p-instr"><b>הוראות</b>${e.instructions.split(/\n+/).map(t => `<p>${esc(t)}</p>`).join('')}</div>`;
   h += '<hr>';
   if (!e.items.length) h += '<div class="empty">המבחן ריק. הוסיפו שאלות מהמאגר.</div>';
-  e.items.forEach((it, i) => {
+  let qn = 0;
+  e.items.forEach(it => {
+    if (it.type === 'chapter') { h += `<div class="p-chap l${it.level}">${esc(it.title || (it.level === 2 ? 'תת־פרק' : 'פרק'))}</div>`; return; }
+    if (it.type === 'free') { h += `<div class="p-free">${String(it.text || '').split(/\n+/).filter(t => t.trim()).map(t => `<p>${esc(t)}</p>`).join('')}</div>`; return; }
+    qn++; const i = qn - 1;
     const cid = first.get(it.id); if (cid) h += `<div class="p-case"><b>סיפור מקרה</b>${blocksHtml(e.cases[cid].blocks)}</div>`;
     if (it.pageBreak) h += '<div class="p-break">— התחלת עמוד חדש —</div>';
     const secs = it.snap.blocks.filter(b => b.type === 'section' && b.points != null);
@@ -279,7 +339,7 @@ function bankView() {
 }
 function detailHtml(q) {
   const cs = q.caseStudyId && S.cases.get(q.caseStudyId);
-  const inExam = S.exam.items.filter(i => i.snap.uid === q.uid).length;
+  const inExam = S.exam.items.filter(i => i.snap?.uid === q.uid).length;
   return `<div><button class="btn primary" data-add="${esc(q.uid)}">הוסף למבחן</button> ${inExam ? `<span class="badge ok">כבר במבחן ×${inExam}</span>` : ''}</div>
     <div style="margin:8px 0">${badgesOf(q)}${q.points != null ? `<span class="badge">${q.points} נק׳ במקור</span>` : ''}</div>
     ${cs ? `<div class="casebox"><h4>סיפור מקרה (משותף ל-${cs.questionIds.length} שאלות)</h4>${blocksHtml(cs.blocks)}</div>` : ''}
@@ -307,9 +367,10 @@ function editHtml(compact) {
   <div class="totalbar ${diff ? 'warn' : ''}" id="totalbar">${totalHtml(tot, e.targetPoints)}
     <span class="spacer"></span>
     <button class="btn sm" id="newq">+ שאלה חדשה במבחן</button>
+    <button class="btn sm" id="newchap">+ פרק</button><button class="btn sm" id="newchap2">+ תת־פרק</button><button class="btn sm" id="newfree">+ טקסט חופשי</button>
     <button class="btn sm" id="eqsplit">הצע חלוקה שווה</button>
-    <button class="btn primary" id="exp-s" ${e.items.length ? '' : 'disabled'}>הפק Word לתלמיד</button>
-    <button class="btn primary" id="exp-t" ${e.items.length ? '' : 'disabled'}>הפק Word למורה</button>
+    <button class="btn primary" id="exp-s" ${questionsOf(e).length ? '' : 'disabled'}>הפק Word לתלמיד</button>
+    <button class="btn primary" id="exp-t" ${questionsOf(e).length ? '' : 'disabled'}>הפק Word למורה</button>
   </div>
   ${e.items.length ? e.items.map((it, i) => itemHtml(it, i, first)).join('') : '<div class="card empty">המבחן ריק. הוסיפו שאלות מהמאגר.</div>'}`;
 }
@@ -317,12 +378,29 @@ function totalHtml(tot, target) {
   const d = tot - target;
   return `<b>סה״כ ${tot} נקודות</b> (יעד ${target})${d ? ` · <b>אזהרה: ${d > 0 ? 'עודף' : 'חסר'} ${Math.abs(d)} נקודות</b> (ההפקה אינה חסומה)` : ' ✓'}`;
 }
+function chapterHtml(it, i) {
+  const n = S.exam.items.length;
+  return `<div class="chap l${it.level}" data-id="${it.id}"><span class="drag" draggable="true" data-dragh="${it.id}" title="גרירה (פרק נגרר עם תוכנו)">⠿</span>
+    <input data-chtitle="${it.id}" value="${esc(it.title)}" placeholder="${it.level === 2 ? 'כותרת תת־פרק' : 'כותרת פרק'}">
+    <label class="chk"><input type="checkbox" data-pb="${it.id}" ${it.pageBreak ? 'checked' : ''}> עמוד חדש</label>
+    <button class="btn sm" data-chlevel="${it.id}" title="החלפה בין פרק לתת־פרק">${it.level === 2 ? 'הפוך לפרק' : 'הפוך לתת־פרק'}</button>
+    <button class="btn sm" data-mv="up:${it.id}" ${i === 0 ? 'disabled' : ''}>▲</button><button class="btn sm" data-mv="down:${it.id}" ${i === n - 1 ? 'disabled' : ''}>▼</button>
+    <button class="btn sm danger" data-rm="${it.id}" title="מוחק רק את הכותרת; השאלות נשארות">מחק</button></div>`;
+}
+function freeHtml(it, i) {
+  const n = S.exam.items.length;
+  return `<div class="freeblk" data-id="${it.id}"><div style="display:flex;gap:6px;align-items:center"><span class="drag" draggable="true" data-dragh="${it.id}" title="גרירה">⠿</span><b>טקסט חופשי</b><span class="spacer"></span>
+    <button class="btn sm" data-mv="up:${it.id}" ${i === 0 ? 'disabled' : ''}>▲</button><button class="btn sm" data-mv="down:${it.id}" ${i === n - 1 ? 'disabled' : ''}>▼</button><button class="btn sm danger" data-rm="${it.id}">מחק</button></div>
+    <textarea data-freetext="${it.id}" placeholder="הוראות, הסבר או כל טקסט שיופיע במבחן בין השאלות">${esc(it.text)}</textarea></div>`;
+}
 function itemHtml(it, i, first) {
+  if (it.type === 'chapter') return chapterHtml(it, i);
+  if (it.type === 'free') return freeHtml(it, i);
   const cid = first.get(it.id); const editing = S.editing.has(it.id);
   const isMC = isChoiceQuestion(it.snap.blocks);
-  return `${cid ? `<div class="card casebox"><h4>סיפור מקרה – מוצג פעם אחת לפני שאלה ${i + 1} <label style="float:inline-end"><input type="checkbox" data-casein="${esc(cid)}" checked> כלול</label></h4>${editing ? '' : ''}${blocksHtml(S.exam.cases[cid].blocks)}</div>` : ''}
+  return `${cid ? `<div class="card casebox"><h4>סיפור מקרה – מוצג פעם אחת לפני שאלה ${qNumber(S.exam, it.id)} <label style="float:inline-end"><input type="checkbox" data-casein="${esc(cid)}" checked> כלול</label></h4>${editing ? '' : ''}${blocksHtml(S.exam.cases[cid].blocks)}</div>` : ''}
   <div class="card item" data-id="${it.id}">
-    <div class="hd"><span class="num">שאלה ${i + 1}</span><span>${badgesOf({ ...it.snap, rubric: it.snap.rubric, title: '' , blocks: it.snap.blocks, caseStudyId: it.snap.caseStudyId, typeId: null })}</span>
+    <div class="hd"><span class="drag" draggable="true" data-dragh="${it.id}" title="גרירה לשינוי סדר">⠿</span><span class="num">שאלה ${qNumber(S.exam, it.id)}</span><span>${badgesOf({ ...it.snap, rubric: it.snap.rubric, title: '' , blocks: it.snap.blocks, caseStudyId: it.snap.caseStudyId, typeId: null })}</span>
       <span class="ctrl">
         <label>נק׳ <input type="number" min="0" data-pts="${it.id}" value="${it.points ?? ''}"></label>
         ${isMC ? '' : `<label>שורות לתשובה <input type="number" min="0" max="20" data-lines="${it.id}" value="${it.answerLines}"></label>`}
@@ -445,6 +523,7 @@ $app.addEventListener('click', async e => {
   if (d.pv) { S.pv = d.pv; S._pvTouched = true; return render(); }
   if (d.tab) { S.tab = d.tab; return render(); }
   if (t.id === 'signin') return signInFlow();
+  if (t.id === 'retrysync') return retrySync();
   if (t.id === 'signout') return signOutFlow();
   if (t.id === 'reset') { S.f = { text: '', domains: new Set(), types: new Set(), kinds: new Set(), years: new Set(), codes: new Set() }; return render(); }
   if (t.id === 'selall') { filtered().forEach(q => S.checked.add(q.uid)); return render(); }
@@ -457,6 +536,9 @@ $app.addEventListener('click', async e => {
   if (d.edit) { S.editing.has(d.edit) ? S.editing.delete(d.edit) : S.editing.add(d.edit); return render(); }
   if (d.delblk) { const [id, bi] = d.delblk.split(':'); const it = S.exam.items.find(i => i.id === id); it.snap.blocks.splice(+bi, 1); it.edited = true; saveExamSoon(); return render(); }
   if (d.addblk) { const it = S.exam.items.find(i => i.id === d.addblk); it.snap.blocks.push({ type: 'text', text: '' }); it.edited = true; saveExamSoon(); return render(); }
+  if (t.id === 'newchap' || t.id === 'newchap2') { const c = addChapter(S.exam, t.id === 'newchap2' ? 2 : 1, ''); saveExamSoon(); render(); setTimeout(() => document.querySelector(`[data-chtitle="${c.id}"]`)?.focus(), 30); return; }
+  if (t.id === 'newfree') { const f = addFree(S.exam, ''); saveExamSoon(); render(); setTimeout(() => document.querySelector(`[data-freetext="${f.id}"]`)?.focus(), 30); return; }
+  if (d.chlevel) { const c = S.exam.items.find(x => x.id === d.chlevel); c.level = c.level === 2 ? 1 : 2; saveExamSoon(); return render(); }
   if (t.id === 'newq') { const it = { id: uid(), snap: { uid: 'draft-' + uid(), kind: 'draft', year: null, examCode: null, originalNumber: null, typeId: null, domainId: null, originalPoints: null, caseStudyId: null, blocks: [{ type: 'text', text: '' }], rubric: null }, edited: false, points: null, answerLines: 3, pageBreak: false, images: [] }; S.exam.items.push(it); S.editing.add(it.id); saveExamSoon(); return render(); }
   if (d.savepq) { S.pq = itemToDraft(S.exam.items.find(i => i.id === d.savepq)); S.tab = 'personal'; return render(); }
   if (d.pqnew !== undefined) { S.pq = emptyDraft(); return render(); }
@@ -475,7 +557,7 @@ $app.addEventListener('click', async e => {
     const q = S.personal.find(x => x.uid === d.suggest); const credit = document.querySelector('[data-sgcredit="' + CSS.escape(d.suggest) + '"]')?.checked;
     const name = credit ? (prompt('השם שיוצג כקרדיט:', S.exam.teacher || '') || '') : '';
     if (credit && !name) return;
-    try { await store.submitSuggestion(q, { credit, authorName: name }); } catch (err) { console.error(err); return toast(err.code === 'permission-denied' ? 'שליחת הצעות עדיין לא פעילה (כללי הענן טרם הופעלו)' : 'השליחה נכשלה: ' + (err.code || err.message)); }
+    try { await store.submitSuggestion(q, { credit, authorName: name, getMedia: k => S.media.get(k) }); } catch (err) { console.error(err); return toast(err.code === 'permission-denied' ? 'אין הרשאה לשלוח הצעה (בעיית הרשאות בענן, או שהשאלה כבר נשלחה)' : 'השליחה נכשלה: ' + (err.code || err.message)); }
     S.suggestions = await store.loadSuggestions(); toast('השאלה נשלחה לבדיקה'); return render();
   }
   if (t.id === 'eqsplit') { equalSplit(S.exam); saveExamSoon(); return render(); }
@@ -509,14 +591,14 @@ $app.addEventListener('change', async e => {
   if (d.pq) { S.pq[d.pq] = t.value; return; }
   if (t.dataset.pqimg !== undefined) {
     const f = t.files[0]; if (!f) return;
-    try { const { data, name } = await prepareImage(f); const id = uid(); const key = 'user/' + id; S.media.set(key, data); await store.putMedia(key, data); S.pq.images.push({ key, name }); return render(); }
+    try { const { data, name } = await prepareImage(f); const id = uid(); const key = 'user/' + id; await putUserMedia(key, data); S.pq.images.push({ key, name }); return render(); }
     catch (err) { return toast('העלאת התמונה נכשלה: ' + err.message); }
   }
   if (d.upimg) {
     const it = S.exam.items.find(i => i.id === d.upimg); const f = t.files[0]; if (!f) return;
     try {
       const { data, name } = await prepareImage(f); const id = uid();
-      const key = 'user/' + id; S.media.set(key, data); await store.putMedia(key, data);
+      const key = 'user/' + id; await putUserMedia(key, data);
       (it.images ||= []).push({ id, key, name, widthCm: 10, position: 'below' });
       saveExamSoon(); toast('התמונה נוספה ונשמרת יחד עם המבחן'); return render();
     } catch (err) { return toast('העלאת התמונה נכשלה: ' + err.message); }
@@ -533,9 +615,31 @@ $app.addEventListener('input', e => {
   if (d.pq) { S.pq[d.pq] = t.value; return; }
   if (d.pql) { const [k, i] = d.pql.split(':'); S.pq[k][+i] = t.value; return; }
   if (d.blk) { const [id, bi] = d.blk.split(':'); const it = S.exam.items.find(i => i.id === id); it.snap.blocks[+bi].text = t.value; if (!it.edited) { it.edited = true; } saveExamSoon(); }
+  if (d.chtitle) { S.exam.items.find(i => i.id === d.chtitle).title = t.value; saveExamSoon(); return; }
+  if (d.freetext) { S.exam.items.find(i => i.id === d.freetext).text = t.value; saveExamSoon(); return; }
   if (d.m && t.type !== 'checkbox') { S.exam[d.m] = t.type === 'number' ? Number(t.value) : t.value; saveExamSoon(); }
 });
 const input = {};
+
+// ---------- גרירה לשינוי סדר (שאלות, פרקים, טקסט חופשי; פרק נגרר עם תוכנו) ----------
+let dragId = null;
+const dropPos = (e, el) => { const r = el.getBoundingClientRect(); return e.clientY > r.top + r.height / 2; };
+const clearDnd = () => $app.querySelectorAll('.dragover').forEach(x => x.classList.remove('dragover'));
+$app.addEventListener('dragstart', e => {
+  const h = e.target.closest?.('[data-dragh]'); if (!h) return;
+  dragId = h.dataset.dragh; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', dragId);
+  const card = h.closest('[data-id]'); if (card) { e.dataTransfer.setDragImage(card, 12, 12); card.classList.add('dragging'); }
+});
+$app.addEventListener('dragover', e => {
+  if (!dragId) return; const card = e.target.closest('[data-id]'); if (!card) return;
+  e.preventDefault(); clearDnd(); card.classList.add('dragover');
+});
+$app.addEventListener('drop', e => {
+  if (!dragId) return; const card = e.target.closest('[data-id]'); if (!card) return;
+  e.preventDefault(); const id = dragId; dragId = null; clearDnd();
+  if (moveTo(S.exam, id, card.dataset.id, dropPos(e, card))) { saveExamSoon(); render(); }
+});
+$app.addEventListener('dragend', () => { dragId = null; clearDnd(); $app.querySelectorAll('.dragging').forEach(x => x.classList.remove('dragging')); });
 $app.addEventListener('dragover', e => { if (e.target.closest('#drop')) { e.preventDefault(); e.target.closest('#drop').classList.add('over'); } });
 $app.addEventListener('drop', e => { if (e.target.closest('#drop')) { e.preventDefault(); importFiles([...e.dataTransfer.files].filter(f => f.name.endsWith('.zip')), { publish: S.adm.publishOnImport }); } });
 
@@ -548,6 +652,7 @@ function openLightbox(src) {
 async function exportDoc(mode) {
   const e = S.exam;
   try {
+    await ensureMedia(examMediaKeys(e));
     const blob = await toBlob(buildExamDocument(e, { getMedia: k => S.media.get(k) }, mode));
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
     a.download = `${(e.title || 'מבחן').replace(/[\\/:*?"<>|]/g, '')} - ${mode === 'teacher' ? 'מורה' : 'תלמיד'}.docx`;

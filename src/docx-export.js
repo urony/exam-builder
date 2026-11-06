@@ -174,7 +174,7 @@ export function buildExamDocument(exam, { getMedia }, mode = 'student') {
     appendixIndex: key => { let i = appendix.indexOf(key); if (i < 0) { appendix.push(key); i = appendix.length - 1; } return i + 1; },
   };
   const ch = [];
-  const total = exam.items.reduce((a, it) => a + (Number(it.points) || 0), 0);
+  const total = exam.items.filter(it => !it.type || it.type === 'question').reduce((a, it) => a + (Number(it.points) || 0), 0);
 
   if (exam.school) ch.push(P([run(exam.school, { bold: true, size: 26 })], { spacing: { after: 60 } }));
   ch.push(P([run(exam.title || 'מבחן', { bold: true, size: 40 })], { alignment: AlignmentType.CENTER, spacing: { before: 120, after: 120 } }));
@@ -189,10 +189,21 @@ export function buildExamDocument(exam, { getMedia }, mode = 'student') {
   ch.push(P([run('')], { border: { bottom: { style: BorderStyle.SINGLE, size: 8, color: '333333', space: 1 } }, spacing: { after: 160 } }));
 
   const firstCase = caseFirstUse(exam);
-  exam.items.forEach((it, idx) => {
+  let qn = 0;
+  exam.items.forEach(it => {
+    if (it.type === 'chapter') {
+      const l1 = it.level !== 2;
+      ch.push(P([run(it.title || (l1 ? 'פרק' : 'תת־פרק'), { bold: true, size: l1 ? 32 : 27, color: l1 ? '1F2A5A' : '333333' })], { keepNext: true, pageBreakBefore: !!it.pageBreak, spacing: { before: l1 ? 360 : 240, after: 120 }, ...(l1 ? { border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: '1F2A5A', space: 2 } } } : {}) }));
+      return;
+    }
+    if (it.type === 'free') {
+      String(it.text || '').split(/\n+/).filter(t => t.trim()).forEach(t => ch.push(P(textRuns(t), { spacing: { before: 60, after: 80 } })));
+      return;
+    }
+    qn++;
     const cid = firstCase.get(it.id);
     if (cid) ch.push(...caseBox(exam.cases[cid].blocks, ctx));
-    const head = [run(`שאלה ${idx + 1}`, { bold: true, size: 26 })];
+    const head = [run(`שאלה ${qn}`, { bold: true, size: 26 })];
     if (exam.showPoints && it.points) head.push(run(` (${it.points} נקודות)`, { size: 24 }));
     ch.push(P(head, { keepNext: true, pageBreakBefore: !!it.pageBreak, spacing: { before: 200, after: 80 } }));
     const imgs = (it.images || []).filter(im => getMedia(im.key));

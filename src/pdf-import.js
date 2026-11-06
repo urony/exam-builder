@@ -17,7 +17,8 @@ const withTimeout = (p, ms, msg) => { let h; return Promise.race([p, new Promise
 export function friendlyPdfError(e) {
   const n = e?.name || '', c = e?.code || '';
   if (c === 'pdf-too-big' || c === 'pdf-too-many-pages' || c === 'pdf-not-pdf' || c === 'pdf-timeout') return e.message;
-  if (n === 'PasswordException') return 'הקובץ מוגן בסיסמה. אפשר להסיר את ההגנה ולנסות שוב.';
+  if (n.startsWith('Pass') && n.endsWith('Exception'))   // שם החריג של pdf.js לקובץ מוגן
+   return 'הקובץ מוגן בסיסמה. אפשר להסיר את ההגנה ולנסות שוב.';
   if (n === 'InvalidPDFException' || n === 'MissingPDFException' || n === 'FormatError') return 'הקובץ אינו PDF תקין או שהוא פגום.';
   return 'לא הצלחנו לקרוא את קובץ ה־PDF (' + (e?.message || n || 'שגיאה') + ').';
 }

@@ -45,6 +45,31 @@ assert.equal(files.size, 2);
 assert.ok(calls.every(c => c.auth === 'Bearer tok'));
 await assert.rejects(createDrive({ getToken: () => null, fetchImpl: fakeFetch }).list(), /התחברות/);
 
+// ---- cloud-store מעל Drive מזויף + Firestore מזויף ----
+const { createCloudStore } = await import('../src/cloud-store.js');
+files.clear();
+const sugg = new Map();
+const fsFake = {
+  collection: (_, n) => ({ n }), doc: (_, c, id) => ({ c, id }), where: () => null, query: c => c,
+  setDoc: async (r, v) => { sugg.set(r.id, v); },
+  getDocs: async c => ({ docs: c.n === 'bank' ? [] : [...sugg.values()].map(v => ({ data: () => v })) }),
+};
+const localStub = { async loadBank() { return { packages: [], questions: ['local'], cases: [], media: new Map() }; }, async loadTaxonomy() { return {}; } };
+const cs = createCloudStore({ drive, firestore: async () => ({ fs: fsFake, db: {} }), uid: 'u1', local: localStub });
+await cs.saveExam({ id: 'e1', title: 'א', updatedAt: 1, items: [] });
+await cs.saveExam({ id: 'e2', title: 'ב', updatedAt: 2, items: [] });
+assert.deepEqual((await cs.loadExams()).map(e => e.id), ['e2', 'e1']);
+await cs.deleteExam('e1');
+assert.equal((await cs.loadExams()).length, 1);
+await cs.savePersonalQuestion({ uid: 'p1', body: 'x' });
+assert.equal((await cs.loadPersonal())[0].uid, 'p1');
+await cs.putMedia('user/abc', new Uint8Array([0x89, 1, 2]));
+assert.deepEqual([...await cs.getMedia('user/abc')], [0x89, 1, 2]);
+const rec = await cs.submitSuggestion({ uid: 'p1', body: 'x' }, { credit: false, authorName: 'שם' });
+assert.equal(rec.authorUid, 'u1'); assert.equal(rec.status, 'pending'); assert.equal(rec.authorName, '');
+assert.equal((await cs.loadSuggestions()).length, 1);
+assert.deepEqual((await cs.loadBank()).questions, ['local'], 'מאגר מרכזי ריק -> נשאר המאגר המקומי');
+
 // ---- כללי Firestore: בדיקה סטטית ----
 const rules = fs.readFileSync('firestore.rules', 'utf8');
 assert.ok(!/allow[^;]*:\s*if\s+true/.test(rules), 'אסור allow ... if true');

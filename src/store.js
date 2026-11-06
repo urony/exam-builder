@@ -43,4 +43,7 @@ export const localStore = {
   removePackage: id => db.removePackage(id),
 };
 
-export const store = localStore;
+// store = מעטפת שמעבירה לגב-קצה הנוכחי (מקומי, או ענן אחרי התחברות). הממשק למעלה לא משתנה.
+let backend = localStore;
+export const setBackend = b => { backend = b || localStore; };
+export const store = new Proxy({}, { get: (_, k) => backend[k] });

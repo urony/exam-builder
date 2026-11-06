@@ -1,6 +1,7 @@
 import { parsePackage, KIND_LABEL } from './adapter.js';
 import { cellLines } from './clean.js';
-import { store } from './store.js';
+import { store, localStore, setBackend } from './store.js';
+import { cloudConfigured } from './firebase-config.js';
 import { newExam, uid, addQuestion, totalPoints, removeItem, moveItem, equalSplit, isChoiceQuestion, caseFirstUse } from './exam.js';
 import { buildExamDocument, toBlob } from './docx-export.js';
 import { prepareImage } from './images.js';
@@ -19,6 +20,7 @@ const S = {
   sel: null, checked: new Set(),
   exam: null, exams: [], editing: new Set(),
   importReports: [], personal: [], suggestions: [], pq: null,
+  user: null, // { uid, name } אחרי התחברות Google; null = מצב מקומי
 };
 const $app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -36,6 +38,28 @@ async function loadAll() {
   for (const p of S.packages) { Object.assign(S.tax.types, p.taxonomy.types); Object.assign(S.tax.domains, p.taxonomy.domains); }
   const meta = await store.loadTaxonomy(); Object.assign(S.tax.domains, meta.domains || {}); Object.assign(S.tax.types, meta.types || {});
   if (!S.exam) S.exam = S.exams[0] || newExam();
+  // בענן תמונות משתמש נמצאות ב-Drive: טוענים את אלה שהמבחנים והשאלות האישיות מפנים אליהן
+  if (store.getMedia) {
+    const keys = new Set([...S.exams.flatMap(x => x.items.flatMap(i => (i.images || []).map(m => m.key))), ...S.personal.flatMap(q => (q.images || []).map(m => m.key))]);
+    for (const k of keys) if (k && !S.media.has(k)) { try { const b = await store.getMedia(k); if (b) S.media.set(k, b); } catch { /* תמונה חסרה */ } }
+  }
+}
+
+async function signInFlow() {
+  try {
+    const cloud = await import('./cloud.js');
+    const u = await cloud.signIn();
+    const { createDrive } = await import('./drive.js');
+    const { createCloudStore } = await import('./cloud-store.js');
+    setBackend(createCloudStore({ drive: createDrive({ getToken: cloud.getDriveToken }), firestore: cloud.firestore, uid: u.uid, local: localStore }));
+    S.user = { uid: u.uid, name: u.name, hasDrive: u.hasDrive };
+    if (!u.hasDrive) toast('לא ניתנה הרשאת Drive – הנתונים האישיים לא יישמרו בענן');
+    S.exam = null; await loadAll(); render(); toast('מחובר: ' + (u.name || 'משתמש'));
+  } catch (err) { console.error(err); toast('ההתחברות נכשלה: ' + (err.code || err.message)); }
+}
+async function signOutFlow() {
+  try { await (await import('./cloud.js')).signOut(); } catch { /* ignore */ }
+  setBackend(localStore); S.user = null; S.exam = null; await loadAll(); render();
 }
 const qByUid = uid => S.questions.find(q => q.uid === uid);
 const vis = () => S.questions.filter(q => q.published !== false); // שאלות מוסתרות לא מוצגות למורים
@@ -127,6 +151,7 @@ function render() {
     </nav>
     ${S.tab === 'work' ? `<div class="seg" role="group" aria-label="מצב תצוגה">${modes.map(([k, t]) => `<button data-mode="${k}" class="${S.mode === k ? 'on' : ''}">${t}</button>`).join('')}</div>` : ''}
     <span class="spacer"></span>
+    ${cloudConfigured() ? (S.user ? `<span class="pill">${esc(S.user.name || 'מחובר')}</span><button class="btn sm" id="signout">התנתק</button>` : '<button class="btn sm" id="signin">התחברות עם Google</button>') : ''}
     <span class="pill" id="pill">${e.items.length} שאלות במבחן · ${totalPoints(e)} נק׳</span>
   </header>
   <main class="${S.tab === 'work' ? 'm-' + S.mode : ''}">${S.tab === 'work' ? workView() : S.tab === 'personal' ? personalView() : adminView()}</main>
@@ -415,6 +440,8 @@ $app.addEventListener('click', async e => {
   if (d.mode) { S.mode = d.mode; localStorage.setItem('mode', d.mode); if (d.mode !== 'exam' && S.pv === 'both') S.pv = 'edit'; S._pvTouched = false; return render(); }
   if (d.pv) { S.pv = d.pv; S._pvTouched = true; return render(); }
   if (d.tab) { S.tab = d.tab; return render(); }
+  if (t.id === 'signin') return signInFlow();
+  if (t.id === 'signout') return signOutFlow();
   if (t.id === 'reset') { S.f = { text: '', domains: new Set(), types: new Set(), kinds: new Set(), years: new Set(), codes: new Set() }; return render(); }
   if (t.id === 'selall') { filtered().forEach(q => S.checked.add(q.uid)); return render(); }
   if (t.id === 'addchecked') { const n = S.checked.size; for (const q of S.questions.filter(q => S.checked.has(q.uid))) addQuestion(S.exam, q, S.cases.get(q.caseStudyId)); S.checked.clear(); saveExamSoon(); toast(`${n} שאלות נוספו למבחן`); return render(); }

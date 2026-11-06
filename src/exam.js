@@ -42,7 +42,28 @@ export function moveTo(exam, id, targetId, after = false) {
   exam.items.splice(at, 0, ...block); exam.updatedAt = Date.now(); return true;
 }
 
-export const isChoiceQuestion = blocks => blocks.some(b => b.type === 'choice');
+// גרירה לפי "פער": gap = אינדקס הכנסה במערך המקורי (0..n), כלומר "לפני הפריט gap".
+// פער תקף: מחוץ לקטע הנגרר; פרק ראשי נופל רק לפני פרק ראשי אחר, בסוף, או לפני הפרק הראשי הראשון (כדי לא לפצל פרק).
+export function validGaps(exam, id) {
+  const r = sectionRange(exam, id); if (!r) return [];
+  const it = exam.items[r[0]], out = [];
+  for (let g = 0; g <= exam.items.length; g++) {
+    if (g >= r[0] && g <= r[1]) continue;
+    if (it.type === 'chapter' && it.level !== 2 && g < exam.items.length && !(exam.items[g].type === 'chapter' && exam.items[g].level !== 2)
+      && exam.items.some((x, k) => k < g && (k < r[0] || k >= r[1]) && x.type === 'chapter' && x.level !== 2)) continue; // לא מפצלים פרק קיים
+    out.push(g);
+  }
+  return out;
+}
+export function moveToGap(exam, id, gap) {
+  if (!validGaps(exam, id).includes(gap)) return false;
+  const [a, b] = sectionRange(exam, id);
+  const block = exam.items.splice(a, b - a);
+  exam.items.splice(gap > b ? gap - (b - a) : gap, 0, ...block);
+  exam.updatedAt = Date.now(); return true;
+}
+
+export const isChoiceQuestion =blocks => blocks.some(b => b.type === 'choice');
 
 export function itemFromQuestion(q) {
   return {

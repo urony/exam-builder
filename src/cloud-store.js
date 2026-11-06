@@ -245,7 +245,7 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
       } catch (e) {
         // רשת/הרשאות: חוזרים למאגר המקומי, אבל מדווחים (לא מטשטשים)
         const base = await local.loadBank();
-        return { ...base, warning: e.code === 'permission-denied' ? 'אין גישה למאגר המרכזי בענן (הרשאות). מוצג המאגר המקומי.' : 'המאגר המרכזי בענן אינו זמין כרגע (' + (e.code || e.message) + '). מוצג המאגר המקומי.' };
+        return { ...base, warning: 'המאגר המרכזי אינו זמין כרגע. מוצג המאגר המקומי; המבחנים והשאלות האישיות שלך נשמרים כרגיל.', warningDetail: `central-bank: ${e.code || ''} ${e.message || e}`.trim() };
       }
     },
     async loadTaxonomy() { await ensure(); return strip(st.meta.taxonomy); },

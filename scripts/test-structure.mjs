@@ -1,6 +1,8 @@
 // בדיקת מבנה מבחן: פרקים, תתי־פרקים, טקסט חופשי, גרירה (קטעים), ניקוד ומספור, והפקת Word.
 import assert from 'node:assert/strict';
 import JSZip from 'jszip';
+import { nudge, wordSpacing } from '../src/imgfit.js';
+import { moveToGap, validGaps } from '../src/exam.js';
 import { newExam, addQuestion, addChapter, addFree, moveTo, sectionRange, qNumber, questionsOf, totalPoints, equalSplit, removeItem, caseFirstUse } from '../src/exam.js';
 import { buildExamDocument, toBuffer } from '../src/docx-export.js';
 import { syntheticPackage } from './helpers.mjs';
@@ -38,6 +40,46 @@ const before = questionsOf(ex).length; removeItem(ex, c1.id); assert.equal(quest
 // עזרי סיפור מקרה לא קורסים על פריטים בלי snap
 assert.ok(caseFirstUse(ex) instanceof Map);
 
+// ---- גרירה לפי פער (כולל כלפי מטה, תתי-פרקים) ----
+{
+  const e = newExam(); const A = addChapter(e, 1, 'A'); const a1 = addQuestion(e, questions[0]); const A2 = addChapter(e, 2, 'A.2'); const a2 = addQuestion(e, questions[1]); const a3 = addQuestion(e, questions[2]);
+  const B = addChapter(e, 1, 'B'); const b1 = addQuestion(e, questions[3]); const B2 = addChapter(e, 2, 'B.2'); const b2 = addQuestion(e, questions[4]);
+  const order = () => e.items.map(i => i.id);
+  const ref = (...xs) => xs.map(i => i.id);
+  const n0 = e.items.length;
+  // תת-פרק A.2 (עם a2,a3) כלפי מטה אל תוך B, לפני B.2 (פער 7)
+  assert.ok(validGaps(e, A2.id).includes(7));
+  assert.ok(moveToGap(e, A2.id, 7)); assert.deepEqual(order(), ref(A, a1, B, b1, A2, a2, a3, B2, b2), 'תת-פרק יורד עם שאלותיו');
+  assert.ok(moveToGap(e, A2.id, 2)); assert.deepEqual(order(), ref(A, a1, A2, a2, a3, B, b1, B2, b2), 'תת-פרק עולה');
+  assert.equal(moveToGap(e, A2.id, 2), false, 'פער צמוד = ללא שינוי'); assert.equal(moveToGap(e, A2.id, 3), false, 'פער בתוך הקטע');
+  assert.ok(!validGaps(e, B.id).includes(3), 'פרק ראשי לא נכנס באמצע פרק אחר');
+  assert.ok(moveToGap(e, A.id, e.items.length)); assert.deepEqual(order(), ref(B, b1, B2, b2, A, a1, A2, a2, a3), 'פרק ראשי יורד לסוף עם כל תוכנו');
+  assert.deepEqual(questionsOf(e).map(q => qNumber(e, q.id)), [1, 2, 3, 4, 5], 'מספור רציף');
+  assert.ok(moveToGap(e, A.id, 0)); assert.deepEqual(order(), ref(A, a1, A2, a2, a3, B, b1, B2, b2));
+  assert.ok(moveToGap(e, a1.id, 8)); assert.equal(e.items.findIndex(i => i.id === a1.id), 7, 'שאלה יורדת לתוך תת-פרק');
+  assert.equal(e.items.length, n0, 'אין אובדן פריטים'); assert.equal(new Set(order()).size, n0, 'אין כפילויות');
+}
+// ---- כוונון תמונות ----
+{
+  const im = { widthCm: 10 };
+  nudge(im, 'r'); nudge(im, 'r'); assert.equal(im.dx, 0.5);
+  nudge(im, 'l'); nudge(im, 'l'); nudge(im, 'l'); assert.equal(im.dx, -0.25);
+  for (let k = 0; k < 40; k++) nudge(im, 'r'); assert.equal(im.dx, 3.5, 'מוגבל כך שהתמונה נשארת בתוך העמוד: (17-10)/2');
+  for (let k = 0; k < 40; k++) nudge(im, 'd'); assert.equal(im.dy, 3);
+  for (let k = 0; k < 40; k++) nudge(im, 'u'); assert.equal(im.dy, -0.25);
+  nudge(im, 'reset'); assert.deepEqual([im.dx, im.dy], [0, 0]);
+  const wide = { widthCm: 17 }; nudge(wide, 'r'); assert.equal(wide.dx, 0, 'תמונה ברוחב מלא לא זזה הצידה');
+  const ws = wordSpacing({ widthCm: 10, dx: 1, dy: 1 }); assert.equal(ws.left, 1134); assert.equal(ws.right, 0); assert.equal(ws.before, Math.round(1.15 * 567));
+  assert.equal(wordSpacing({ widthCm: 10, dx: -1, dy: 0 }).right, 1134);
+}
+// ---- תבניות: אותו תוכן, גופן שונה ----
+{
+  const e2 = JSON.parse(JSON.stringify(ex)); e2.items = ex.items.slice();
+  const xm = async t => (await JSZip.loadAsync(await toBuffer(buildExamDocument({ ...e2, template: t }, { getMedia: () => null }, 'student')))).file('word/document.xml').async('string');
+  const m = await xm('modern'), b = await xm('bagrut');
+  assert.ok(m.includes('Arial') && !m.includes('David')); assert.ok(b.includes('David') && !b.includes('Arial'));
+  const txt = x => x.replace(/<[^>]+>/g, ''); assert.equal(txt(m), txt(b), 'התוכן והסדר זהים בשתי התבניות');
+}
 // Word: כותרות, טקסט חופשי, מספור
 const buf = await toBuffer(buildExamDocument(ex, { getMedia: () => null }, 'student'));
 const xml = await (await JSZip.loadAsync(buf)).file('word/document.xml').async('string');

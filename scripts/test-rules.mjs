@@ -82,6 +82,8 @@ await no('A media in B name', A.doc('suggestionMedia/sm-a2').set(sm({ authorUid:
 await no('A media too big', A.doc('suggestionMedia/sm-a3').set(sm({ data: bytes(900001) })));
 await no('A media extra field', A.doc('suggestionMedia/sm-a4').set(sm({ extra: 1 })));
 await no('A media not bytes', A.doc('suggestionMedia/sm-a5').set(sm({ data: 'text' })));
+await no('A media parts absurd', A.doc('suggestionMedia/sm-a6').set(sm({ parts: 999 })));
+await no('A media part not int', A.doc('suggestionMedia/sm-a7').set(sm({ part: 'x' })));
 await no('A reads B media', A.doc('suggestionMedia/sm-b').get());
 await ok('A reads own media', A.doc('suggestionMedia/sm-a1').get());
 await no('A deletes own media', A.doc('suggestionMedia/sm-a1').delete());

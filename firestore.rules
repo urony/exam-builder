@@ -58,6 +58,8 @@ service cloud.firestore {
     match /suggestionMedia/{id} {
       allow create: if isOwner(request.resource.data.authorUid)
         && request.resource.data.keys().hasOnly(['sgId', 'authorUid', 'key', 'part', 'parts', 'data', 'tag'])
+        && request.resource.data.sgId is string && request.resource.data.key is string
+        && request.resource.data.part is int && request.resource.data.parts is int && request.resource.data.parts <= 20
         && request.resource.data.data is bytes && request.resource.data.data.size() <= 900000;
       allow get, list: if signedIn() && (resource.data.authorUid == request.auth.uid || isAdmin());
       allow update, delete: if isAdmin();

@@ -4,9 +4,11 @@ import { store, localStore, setBackend } from './store.js';
 import { cloudConfigured } from './firebase-config.js';
 import * as idb from './db.js';
 import { createIdbStore } from './outbox.js';
-import { newExam, uid, addQuestion, totalPoints, isQ, questionsOf, qNumber, addChapter, addFree, moveTo, removeItem, moveItem, equalSplit, isChoiceQuestion, caseFirstUse } from './exam.js';
+import { newExam, uid, addQuestion, totalPoints, isQ, questionsOf, qNumber, addChapter, addFree, moveToGap, validGaps, sectionRange, removeItem, moveItem, equalSplit, isChoiceQuestion, caseFirstUse } from './exam.js';
 import { buildExamDocument, toBlob } from './docx-export.js';
 import { prepareImage } from './images.js';
+import { nudge, previewStyle, normOffsets } from './imgfit.js';
+import { TEMPLATES } from './templates.js';
 import { createAdmin } from './admin.js';
 import { LETTERS, SOURCE_OPTIONS, emptyDraft, draftToQuestion, validateDraft, questionToDraft, itemToDraft } from './personal.js';
 
@@ -20,7 +22,7 @@ const S = {
   f: { text: '', domains: new Set(), types: new Set(), kinds: new Set(), years: new Set(), codes: new Set() },
   sort: 'year-desc',
   sel: null, checked: new Set(),
-  exam: null, exams: [], editing: new Set(),
+  exam: null, exams: [], editing: new Set(), collapsed: new Set(),
   importReports: [], personal: [], suggestions: [], pq: null,
   user: null, // { uid, name } אחרי התחברות Google; null = מצב מקומי
   isAdmin: false, warn: '', sync: null, mediaMissing: new Set(),
@@ -32,7 +34,8 @@ function toast(msg) { const t = document.getElementById('toast'); t.textContent 
 // ---------- טעינה ----------
 async function loadAll() {
   const bank = await store.loadBank();
-  S.warn = bank.warning || '';
+  S.warn = bank.warning || ''; S.warnDetail = bank.warningDetail || '';
+  if (S.warnDetail) logErr('מאגר מרכזי', S.warnDetail);
   S.packages = bank.packages; S.questions = bank.questions; S.media = bank.media;
   S.cases = new Map(bank.cases.map(c => [c.uid, c]));
   S.exams = await store.loadExams();
@@ -75,13 +78,21 @@ async function putUserMedia(key, data) {
 }
 
 // ---------- סנכרון / אזהרות (לא מטשטשים שגיאות) ----------
+// יומן שגיאות טכני (בזיכרון, לתצוגה ב"פרטים טכניים"); המורה רואה הודעה ידידותית בלבד
+function logErr(what, detail) { (S.errlog ||= []).unshift(`${new Date().toLocaleTimeString('he-IL')} · ${what}: ${detail}`); S.errlog.length = Math.min(S.errlog.length, 30); console.warn('log:', what, detail); }
+// כשל במאגר המרכזי (Firestore) נפרד מכשל סנכרון אישי (Drive): לא חוסם התחברות או שמירה אישית
+function reportCentral(what, err) {
+  logErr(what, `${err?.code || ''} ${err?.message || err}`.trim());
+  if (!S.warn) S.warn = what === 'suggestions' ? 'ההצעות למאגר המרכזי אינן זמינות כרגע. כל שאר היכולות פועלות כרגיל.' : 'יומן הפעולות של המאגר המרכזי אינו זמין כרגע.';
+  if (document.getElementById('syncbar')) document.getElementById('syncbar').outerHTML = syncBarHtml();
+}
 function reportSync(what, err) {
-  console.warn('sync:', what, err);
+  console.warn('sync:', what, err); logErr(what, `${err?.code || ''} ${err?.message || err} ${err?.cause?.message || ''}`.trim());
   const st = err?.cause?.status ?? err?.status;
-  S.sync = { msg: err?.code === 'sync-pending' ? 'השמירה בענן נכשלה. הנתונים נשמרו במחשב וימתינו לסנכרון.' : `בעיית סנכרון (${what}): ${err?.code || err?.message || err}`, relogin: st === 401 || st === 403 };
+  S.sync = { msg: err?.code === 'sync-pending' ? 'השמירה ב־Google Drive נכשלה. המבחן נשמר במחשב הזה וימתין לסנכרון.' : 'לא הצלחנו להתחבר ל־Google Drive כרגע. העבודה שלך נשמרת במחשב הזה, ואפשר לנסות שוב.', relogin: st === 401 || st === 403 };
   if (document.getElementById('app')) { const b = document.getElementById('syncbar'); if (b) b.outerHTML = syncBarHtml(); else render(); }
 }
-const syncBarHtml = () => `<div id="syncbar">${S.sync ? `<div class="warnbar">${esc(S.sync.msg)} ${S.sync.relogin ? '<button class="btn sm" id="signin">התחבר מחדש</button>' : '<button class="btn sm" id="retrysync">נסה שוב</button>'}</div>` : ''}${S.warn ? `<div class="warnbar">${esc(S.warn)}</div>` : ''}${S.user && !S.user.hasDrive ? '<div class="warnbar">לא ניתנה הרשאת Drive: מבחנים ושאלות אישיות נשמרים במחשב הזה בלבד ולא בענן.</div>' : ''}</div>`;
+const syncBarHtml = () => `<div id="syncbar">${S.sync ? `<div class="warnbar">${esc(S.sync.msg)} ${S.sync.relogin ? '<button class="btn sm" id="signin">התחבר מחדש</button>' : '<button class="btn sm" id="retrysync">נסה שוב</button>'}</div>` : ''}${S.warn ? `<div class="warnbar">${esc(S.warn)} <button class="btn sm" id="retrybank">נסה לטעון שוב</button></div>` : ''}${S.errlog?.length && (S.warn || S.sync) ? `<details class="techlog"><summary>פרטים טכניים</summary><pre>${esc(S.errlog.join(String.fromCharCode(10)))}</pre></details>` : ''}${S.user && !S.user.hasDrive ? '<div class="warnbar">לא ניתנה הרשאת Drive: מבחנים ושאלות אישיות נשמרים במחשב הזה בלבד ולא בענן.</div>' : ''}</div>`;
 async function retrySync() {
   if (!store.flush) return;
   try { const r = await store.flush(); if (!r.pending) { S.sync = null; toast('הסנכרון הושלם'); } else toast(`${r.pending} פריטים עדיין ממתינים לסנכרון`); } catch (e) { reportSync('סנכרון', e); }
@@ -98,7 +109,7 @@ async function signInFlow() {
     setBackend(createCloudStore({
       drive: createDrive({ getToken: cloud.getDriveToken }), firestore: cloud.firestore, uid: u.uid, isAdmin: admin, local: localStore,
       outbox: createIdbStore(idb, `ob:${u.uid}:`), mediaCache: createIdbStore(idb, 'mc:'), driveEnabled: u.hasDrive,
-      onSyncError: e => reportSync(e.where, e.error),
+      onSyncError: e => (e.where === 'suggestions' || e.where === 'audit') ? reportCentral(e.where, e.error) : reportSync(e.where, e.error),
     }));
     S.user = { uid: u.uid, name: u.name, hasDrive: u.hasDrive }; S.isAdmin = admin; S.sync = null; S.exam = null; S.mediaMissing.clear();
     try { await loadAll(); toast('מחובר: ' + (u.name || 'משתמש') + (admin ? ' (מנהל)' : '')); }
@@ -269,8 +280,9 @@ function rubricOpen(r) {
 }
 function paper() {
   const e = S.exam, teacher = S.pvTeacher, first = caseFirstUse(e), tot = totalPoints(e);
-  const pic = im => `<img src="${mediaUrl(im.key)}" alt="" style="width:${Math.min(100, im.widthCm / 17 * 100)}%">`;
-  let h = `<div class="paperwrap"><div class="pvnote">תצוגה משוערת של המסמך. מעברי עמוד ופריסה ב־Word עשויים להיות שונים מעט. <b id="pgest"></b></div><div class="paper" id="paper">`;
+  const pic = im => `<div class="pimg" style="${previewStyle(im)}"><img src="${mediaUrl(im.key)}" alt="" style="width:${Math.min(100, im.widthCm / 17 * 100)}%"></div>`;
+  const spic = im => `<div class="pimg" style="${previewStyle({ ...im, widthCm: Math.min(im.widthCm, 6.5) }, 5.8)}"><img src="${mediaUrl(im.key)}" alt=""></div>`;
+  let h = `<div class="paperwrap"><div class="pvnote">תצוגה משוערת של המסמך. מעברי עמוד ופריסה ב־Word עשויים להיות שונים מעט. <b id="pgest"></b></div><div class="paper tpl-${e.template === 'bagrut' ? 'bagrut' : 'modern'}" id="paper">`;
   if (e.school) h += `<div class="p-school">${esc(e.school)}</div>`;
   h += `<h2 class="p-title">${esc(e.title || 'מבחן')}</h2>`;
   if (teacher) h += '<div class="p-teacher">גרסת מורה – כולל תשובות ומחוונים</div>';
@@ -291,7 +303,7 @@ function paper() {
     const secPts = e.showPoints && secs.length && secs.reduce((a, b) => a + b.points, 0) === Number(it.points);
     const imgs = it.images || [];
     const body = `<div class="qbody">${blocksHtml(it.snap.blocks, { pts: secPts })}</div>`;
-    const side = imgs.filter(x => x.position === 'side').map(pic).join('');
+    const side = imgs.filter(x => x.position === 'side').map(spic).join('');
     h += `<div class="p-q"><div class="p-qh">שאלה ${i + 1}${e.showPoints && it.points ? ` <span>(${it.points} נקודות)</span>` : ''}</div>`;
     h += imgs.filter(x => x.position === 'above').map(pic).join('');
     h += side ? `<div class="sidewrap">${body}<div class="sideimg">${side}</div></div>` : body;
@@ -360,6 +372,7 @@ function editHtml(compact) {
       <label>שם המורה<input data-m="teacher" value="${esc(e.teacher)}"></label>
       <label>תאריך<input data-m="date" value="${esc(e.date)}" placeholder="למשל 05.11.2026"></label>
       <label>סך נקודות רצוי<input type="number" data-m="targetPoints" value="${e.targetPoints}"></label>
+      <label>תבנית עיצוב<select data-m="template">${Object.values(TEMPLATES).map(t => `<option value="${t.id}" ${(e.template || 'modern') === t.id ? 'selected' : ''}>${t.label}</option>`).join('')}</select></label>
       <label style="flex-direction:row;align-items:center;gap:6px;margin-top:18px"><input type="checkbox" data-m="showPoints" ${e.showPoints ? 'checked' : ''}> הצג ניקוד במסמך התלמיד</label>
     </div>
     <label class="exam-meta" style="display:block;margin-top:10px"><label>הוראות כלליות (אופציונלי)<textarea data-m="instructions" rows="2" style="width:100%">${esc(e.instructions)}</textarea></label></label>
@@ -372,15 +385,24 @@ function editHtml(compact) {
     <button class="btn primary" id="exp-s" ${questionsOf(e).length ? '' : 'disabled'}>הפק Word לתלמיד</button>
     <button class="btn primary" id="exp-t" ${questionsOf(e).length ? '' : 'disabled'}>הפק Word למורה</button>
   </div>
-  ${e.items.length ? e.items.map((it, i) => itemHtml(it, i, first)).join('') : '<div class="card empty">המבחן ריק. הוסיפו שאלות מהמאגר.</div>'}`;
+  ${e.items.length ? e.items.map((it, i) => hiddenByCollapse(e, i) ? '' : itemHtml(it, i, first)).join('') : '<div class="card empty">המבחן ריק. הוסיפו שאלות מהמאגר.</div>'}`;
 }
 function totalHtml(tot, target) {
   const d = tot - target;
   return `<b>סה״כ ${tot} נקודות</b> (יעד ${target})${d ? ` · <b>אזהרה: ${d > 0 ? 'עודף' : 'חסר'} ${Math.abs(d)} נקודות</b> (ההפקה אינה חסומה)` : ' ✓'}`;
 }
+// כיווץ פרקים: נוחות עריכה בלבד (לא נשמר, לא משפיע על התצוגה המקדימה או על Word)
+function hiddenByCollapse(e, i) {
+  for (let k = i - 1; k >= 0; k--) {
+    const c = e.items[k];
+    if (c.type === 'chapter' && S.collapsed.has(c.id)) { const r = sectionRange(e, c.id); if (i < r[1]) return true; }
+  }
+  return false;
+}
 function chapterHtml(it, i) {
-  const n = S.exam.items.length;
+  const n = S.exam.items.length, r = sectionRange(S.exam, it.id), cnt = S.exam.items.slice(r[0] + 1, r[1]).filter(isQ).length, col = S.collapsed.has(it.id);
   return `<div class="chap l${it.level}" data-id="${it.id}"><span class="drag" draggable="true" data-dragh="${it.id}" title="גרירה (פרק נגרר עם תוכנו)">⠿</span>
+    <button class="btn sm tog" data-collapse="${it.id}" title="${col ? 'הרחב' : 'כווץ'}" aria-expanded="${!col}">${col ? '◀' : '▼'}</button><span class="badge cnt">${cnt} שאלות</span>
     <input data-chtitle="${it.id}" value="${esc(it.title)}" placeholder="${it.level === 2 ? 'כותרת תת־פרק' : 'כותרת פרק'}">
     <label class="chk"><input type="checkbox" data-pb="${it.id}" ${it.pageBreak ? 'checked' : ''}> עמוד חדש</label>
     <button class="btn sm" data-chlevel="${it.id}" title="החלפה בין פרק לתת־פרק">${it.level === 2 ? 'הפוך לפרק' : 'הפוך לתת־פרק'}</button>
@@ -418,10 +440,10 @@ function itemHtml(it, i, first) {
 }
 function previewHtml(it) {
   const imgs = it.images || [];
-  const pic = im => `<img src="${mediaUrl(im.key)}" alt="${esc(im.name)}" style="width:${Math.min(100, im.widthCm / 17 * 100)}%">`;
+  const pic = im => `<div class="pimg" style="${previewStyle(im)}"><img src="${mediaUrl(im.key)}" alt="${esc(im.name)}" style="width:${Math.min(100, im.widthCm / 17 * 100)}%"></div>`;
   const above = imgs.filter(i => i.position === 'above').map(pic).join('');
   const below = imgs.filter(i => i.position === 'below').map(pic).join('');
-  const side = imgs.filter(i => i.position === 'side').map(i => `<img src="${mediaUrl(i.key)}" alt="${esc(i.name)}">`).join('');
+  const side = imgs.filter(i => i.position === 'side').map(i => `<div class="pimg" style="${previewStyle({ ...i, widthCm: Math.min(i.widthCm, 6.5) }, 5.8)}"><img src="${mediaUrl(i.key)}" alt="${esc(i.name)}"></div>`).join('');
   const body = `<div class="qbody">${blocksHtml(it.snap.blocks)}</div>`;
   return side ? `${above}<div class="sidewrap">${body}<div class="sideimg">${side}</div></div>${below}` : `${above}${body}${below}`;
 }
@@ -435,6 +457,7 @@ function imagesPanelHtml(it) {
       <div><div class="s">${esc(im.name)}</div>
       <label>רוחב (ס״מ) <input type="number" min="2" max="17" step="0.5" data-imgw="${it.id}:${im.id}" value="${im.widthCm}"></label>
       <label>מיקום <select data-imgpos="${it.id}:${im.id}"><option value="above" ${im.position === 'above' ? 'selected' : ''}>מעל השאלה</option><option value="below" ${im.position === 'below' ? 'selected' : ''}>מתחת לשאלה</option><option value="side" ${im.position === 'side' ? 'selected' : ''}>לצד השאלה</option></select></label>
+      <div class="imgnudge" title="כוונון עדין (צעד 0.25 ס״מ). התמונה נשארת בתוך העמוד ולא מכסה טקסט"><span class="s">הזזה:</span>${['l:←:שמאלה', 'r:→:ימינה', 'u:↑:למעלה', 'd:↓:למטה'].map(x => { const [k, g, n] = x.split(':'); return `<button class="btn sm" data-nudge="${it.id}:${im.id}:${k}" title="${n}">${g}</button>`; }).join('')}<button class="btn sm" data-nudge="${it.id}:${im.id}:reset" title="חזרה למיקום המקורי" ${normOffsets(im).dx || normOffsets(im).dy ? '' : 'disabled'}>איפוס</button></div>
       <button class="btn sm danger" data-rmimg="${it.id}:${im.id}">הסר</button></div></div>`).join('')}
   </div>`;
 }
@@ -524,12 +547,14 @@ $app.addEventListener('click', async e => {
   if (d.tab) { S.tab = d.tab; return render(); }
   if (t.id === 'signin') return signInFlow();
   if (t.id === 'retrysync') return retrySync();
+  if (t.id === 'retrybank') { try { await loadAll(); } catch (err) { logErr('טעינה', err.message); } return render(); }
   if (t.id === 'signout') return signOutFlow();
   if (t.id === 'reset') { S.f = { text: '', domains: new Set(), types: new Set(), kinds: new Set(), years: new Set(), codes: new Set() }; return render(); }
   if (t.id === 'selall') { filtered().forEach(q => S.checked.add(q.uid)); return render(); }
   if (t.id === 'addchecked') { const n = S.checked.size; for (const q of S.questions.filter(q => S.checked.has(q.uid))) addQuestion(S.exam, q, S.cases.get(q.caseStudyId)); S.checked.clear(); saveExamSoon(); toast(`${n} שאלות נוספו למבחן`); return render(); }
   if (d.add) { const q = qByUid(d.add); addQuestion(S.exam, q, S.cases.get(q.caseStudyId)); saveExamSoon(); toast(q.caseStudyId ? 'השאלה נוספה, וסיפור המקרה צורף פעם אחת (אפשר להסיר במבחן)' : 'השאלה נוספה למבחן'); return render(); }
   if (d.uid && !e.target.matches('input')) { S.sel = d.uid; if (S.mode === 'split') S.modal = d.uid; return render(); }
+  if (d.nudge) { const [a, b, k] = d.nudge.split(':'); const it = S.exam.items.find(i => i.id === a), im = it.images.find(i => i.id === b); const side = im.position === 'side', tmp = { ...im, widthCm: side ? Math.min(im.widthCm, 6.5) : im.widthCm }; nudge(tmp, k, side ? 5.8 : 17); im.dx = tmp.dx; im.dy = tmp.dy; saveExamSoon(); return render(); }
   if (d.rmimg) { const [a, b] = d.rmimg.split(':'); const it = S.exam.items.find(i => i.id === a); it.images = it.images.filter(i => i.id !== b); saveExamSoon(); return render(); }
   if (d.mv) { const [dir, id] = d.mv.split(':'); moveItem(S.exam, id, dir === 'up' ? -1 : 1); saveExamSoon(); return render(); }
   if (d.rm) { removeItem(S.exam, d.rm); saveExamSoon(); return render(); }
@@ -538,6 +563,7 @@ $app.addEventListener('click', async e => {
   if (d.addblk) { const it = S.exam.items.find(i => i.id === d.addblk); it.snap.blocks.push({ type: 'text', text: '' }); it.edited = true; saveExamSoon(); return render(); }
   if (t.id === 'newchap' || t.id === 'newchap2') { const c = addChapter(S.exam, t.id === 'newchap2' ? 2 : 1, ''); saveExamSoon(); render(); setTimeout(() => document.querySelector(`[data-chtitle="${c.id}"]`)?.focus(), 30); return; }
   if (t.id === 'newfree') { const f = addFree(S.exam, ''); saveExamSoon(); render(); setTimeout(() => document.querySelector(`[data-freetext="${f.id}"]`)?.focus(), 30); return; }
+  if (d.collapse) { S.collapsed.has(d.collapse) ? S.collapsed.delete(d.collapse) : S.collapsed.add(d.collapse); return render(); }
   if (d.chlevel) { const c = S.exam.items.find(x => x.id === d.chlevel); c.level = c.level === 2 ? 1 : 2; saveExamSoon(); return render(); }
   if (t.id === 'newq') { const it = { id: uid(), snap: { uid: 'draft-' + uid(), kind: 'draft', year: null, examCode: null, originalNumber: null, typeId: null, domainId: null, originalPoints: null, caseStudyId: null, blocks: [{ type: 'text', text: '' }], rubric: null }, edited: false, points: null, answerLines: 3, pageBreak: false, images: [] }; S.exam.items.push(it); S.editing.add(it.id); saveExamSoon(); return render(); }
   if (d.savepq) { S.pq = itemToDraft(S.exam.items.find(i => i.id === d.savepq)); S.tab = 'personal'; return render(); }
@@ -583,7 +609,7 @@ $app.addEventListener('change', async e => {
   if (d.chk) { t.checked ? S.checked.add(d.chk) : S.checked.delete(d.chk); return render(); }
   if (d.m) {
     S.exam[d.m] = t.type === 'checkbox' ? t.checked : t.type === 'number' ? Number(t.value) : t.value;
-    saveExamSoon(); if (['targetPoints', 'showPoints'].includes(d.m)) return render(); return;
+    saveExamSoon(); if (['targetPoints', 'showPoints', 'template'].includes(d.m)) return render(); return;
   }
   if (d.pts) { const it = S.exam.items.find(i => i.id === d.pts); it.points = t.value === '' ? null : Number(t.value); saveExamSoon(); return render(); }
   if (d.lines) { S.exam.items.find(i => i.id === d.lines).answerLines = Number(t.value) || 0; saveExamSoon(); return; }
@@ -622,24 +648,39 @@ $app.addEventListener('input', e => {
 const input = {};
 
 // ---------- גרירה לשינוי סדר (שאלות, פרקים, טקסט חופשי; פרק נגרר עם תוכנו) ----------
-let dragId = null;
-const dropPos = (e, el) => { const r = el.getBoundingClientRect(); return e.clientY > r.top + r.height / 2; };
-const clearDnd = () => $app.querySelectorAll('.dragover').forEach(x => x.classList.remove('dragover'));
+// פער יעד (אינדקס הכנסה) נקבע לפי מיקום העכבר מול הפערים התקפים; קו מקווקו מראה את המקום המדויק.
+let dragId = null, dropGap = null;
+const ROWS = '.chap[data-id], .freeblk[data-id], .card.item[data-id]';
+const dropLine = () => { let l = document.getElementById('dropline'); if (!l) { l = document.createElement('div'); l.id = 'dropline'; document.body.appendChild(l); } return l; };
+function clearDnd() { document.getElementById('dropline')?.remove(); $app.querySelectorAll('.dragging').forEach(x => x.classList.remove('dragging')); dropGap = null; }
+function gapAt(y) {
+  const items = S.exam.items, rows = [...$app.querySelectorAll(ROWS)].filter(r => r.offsetParent);
+  if (!rows.length) return null;
+  const cand = rows.map(r => ({ g: items.findIndex(x => x.id === r.dataset.id), y: r.getBoundingClientRect().top - 5, r }));
+  const last = rows[rows.length - 1].getBoundingClientRect(); cand.push({ g: items.length, y: last.bottom + 5, r: rows[rows.length - 1] });
+  const ok = new Set(validGaps(S.exam, dragId));
+  let best = null; for (const c of cand) if (ok.has(c.g) && (!best || Math.abs(c.y - y) < Math.abs(best.y - y))) best = c;
+  return best;
+}
 $app.addEventListener('dragstart', e => {
   const h = e.target.closest?.('[data-dragh]'); if (!h) return;
   dragId = h.dataset.dragh; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', dragId);
-  const card = h.closest('[data-id]'); if (card) { e.dataTransfer.setDragImage(card, 12, 12); card.classList.add('dragging'); }
+  const card = h.closest('[data-id]'); if (card) e.dataTransfer.setDragImage(card, 12, 12);
+  const [a, b] = sectionRange(S.exam, dragId) || [0, 0], ids = new Set(S.exam.items.slice(a, b).map(x => x.id));
+  setTimeout(() => $app.querySelectorAll(ROWS).forEach(r => ids.has(r.dataset.id) && r.classList.add('dragging')), 0);
 });
 $app.addEventListener('dragover', e => {
-  if (!dragId) return; const card = e.target.closest('[data-id]'); if (!card) return;
-  e.preventDefault(); clearDnd(); card.classList.add('dragover');
+  if (!dragId) return;
+  const c = gapAt(e.clientY); if (!c) { dropGap = null; document.getElementById('dropline')?.remove(); return; }
+  e.preventDefault(); e.dataTransfer.dropEffect = 'move'; dropGap = c.g;
+  const rr = c.r.getBoundingClientRect(), l = dropLine(); l.style.top = c.y + 'px'; l.style.left = (rr.left - 6) + 'px'; l.style.width = (rr.width + 12) + 'px';
 });
 $app.addEventListener('drop', e => {
-  if (!dragId) return; const card = e.target.closest('[data-id]'); if (!card) return;
-  e.preventDefault(); const id = dragId; dragId = null; clearDnd();
-  if (moveTo(S.exam, id, card.dataset.id, dropPos(e, card))) { saveExamSoon(); render(); }
+  if (!dragId) return; e.preventDefault();
+  const id = dragId, g = dropGap; dragId = null; clearDnd();
+  if (g != null && moveToGap(S.exam, id, g)) { saveExamSoon(); render(); }
 });
-$app.addEventListener('dragend', () => { dragId = null; clearDnd(); $app.querySelectorAll('.dragging').forEach(x => x.classList.remove('dragging')); });
+$app.addEventListener('dragend', () => { dragId = null; clearDnd(); });
 $app.addEventListener('dragover', e => { if (e.target.closest('#drop')) { e.preventDefault(); e.target.closest('#drop').classList.add('over'); } });
 $app.addEventListener('drop', e => { if (e.target.closest('#drop')) { e.preventDefault(); importFiles([...e.dataTransfer.files].filter(f => f.name.endsWith('.zip')), { publish: S.adm.publishOnImport }); } });
 

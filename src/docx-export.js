@@ -6,12 +6,13 @@ import {
 import { imageSize } from './adapter.js';
 import { caseFirstUse } from './exam.js';
 import { cellLines } from './clean.js';
+import { templateOf } from './templates.js';
+import { wordSpacing } from './imgfit.js';
 
-const FONT = 'Arial';
-const BODY = 24; // half-points = 12pt
+let T = templateOf(null); // התבנית הפעילה בזמן בניית מסמך (בנייה סינכרונית)
 const CONTENT_DXA = 9638; // A4 עם שוליים 2 ס"מ
 
-const run = (text, o = {}) => new TextRun({ text, rightToLeft: true, font: FONT, size: BODY, ...o });
+const run = (text, o = {}) => new TextRun({ text, rightToLeft: true, font: T.font, size: T.body, ...o });
 
 function textRuns(text, o = {}) {
   const parts = String(text ?? '').split('\n');
@@ -22,12 +23,13 @@ function textRuns(text, o = {}) {
 const P = (children, o = {}) => new Paragraph({ bidirectional: true, children, ...o });
 
 // ברירת מחדל גדולה כדי שמספרים וסימונים בתרשימים מורכבים יישארו קריאים (640px ~ 17 ס"מ). widthCm גובר.
-function imageParagraph(u8, { maxW = 640, maxH = 640, widthCm = null, alt = 'איור', after = 120 } = {}) {
+function imageParagraph(u8, { maxW = 640, maxH = 640, widthCm = null, alt = 'איור', after = 120, off = null, availCm = 17 } = {}) {
   const { w, h } = imageSize(u8);
   const s = widthCm ? (widthCm * 96 / 2.54) / w : Math.min(1, maxW / w, maxH / h);
   const type = u8[0] === 0x89 ? 'png' : 'jpg';
   return new Paragraph({
     alignment: AlignmentType.CENTER, keepNext: false, spacing: { before: 80, after },
+    ...(off ? (() => { const w = wordSpacing(off, availCm); return { spacing: { before: w.before, after }, indent: { left: w.left, right: w.right } }; })() : {}),
     children: [new ImageRun({ type, data: u8, transformation: { width: Math.round(w * s), height: Math.round(h * s) }, altText: { name: alt, title: alt, description: alt } })],
   });
 }
@@ -167,6 +169,7 @@ function rubricBox(item, ctx) {
 }
 
 export function buildExamDocument(exam, { getMedia }, mode = 'student') {
+  T = templateOf(exam);
   const teacher = mode === 'teacher';
   const appendix = [];
   const ctx = {
@@ -177,7 +180,7 @@ export function buildExamDocument(exam, { getMedia }, mode = 'student') {
   const total = exam.items.filter(it => !it.type || it.type === 'question').reduce((a, it) => a + (Number(it.points) || 0), 0);
 
   if (exam.school) ch.push(P([run(exam.school, { bold: true, size: 26 })], { spacing: { after: 60 } }));
-  ch.push(P([run(exam.title || 'מבחן', { bold: true, size: 40 })], { alignment: AlignmentType.CENTER, spacing: { before: 120, after: 120 } }));
+  ch.push(P([run(exam.title || 'מבחן', { bold: true, size: T.title })], { alignment: AlignmentType.CENTER, spacing: { before: 120, after: 120 } }));
   if (teacher) ch.push(P([run('גרסת מורה – כולל תשובות ומחוונים', { bold: true, color: 'B00020', size: 26 })], { alignment: AlignmentType.CENTER, spacing: { after: 100 } }));
   const meta = [exam.teacher && `מורה: ${exam.teacher}`, exam.date && `תאריך: ${exam.date}`, exam.showPoints && total ? `סה״כ ${total} נקודות` : null].filter(Boolean);
   if (meta.length) ch.push(P([run(meta.join('   |   '))], { alignment: AlignmentType.CENTER, spacing: { after: 100 } }));
@@ -193,7 +196,7 @@ export function buildExamDocument(exam, { getMedia }, mode = 'student') {
   exam.items.forEach(it => {
     if (it.type === 'chapter') {
       const l1 = it.level !== 2;
-      ch.push(P([run(it.title || (l1 ? 'פרק' : 'תת־פרק'), { bold: true, size: l1 ? 32 : 27, color: l1 ? '1F2A5A' : '333333' })], { keepNext: true, pageBreakBefore: !!it.pageBreak, spacing: { before: l1 ? 360 : 240, after: 120 }, ...(l1 ? { border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: '1F2A5A', space: 2 } } } : {}) }));
+      ch.push(P([run(it.title || (l1 ? 'פרק' : 'תת־פרק'), { bold: true, size: l1 ? T.chap1 : T.chap2, color: l1 ? T.chapColor1 : T.chapColor2 })], { keepNext: true, pageBreakBefore: !!it.pageBreak, spacing: { before: l1 ? 360 : 240, after: 120 }, ...(l1 && T.chapRule ? { border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: '1F2A5A', space: 2 } } } : {}) }));
       return;
     }
     if (it.type === 'free') {
@@ -203,11 +206,11 @@ export function buildExamDocument(exam, { getMedia }, mode = 'student') {
     qn++;
     const cid = firstCase.get(it.id);
     if (cid) ch.push(...caseBox(exam.cases[cid].blocks, ctx));
-    const head = [run(`שאלה ${qn}`, { bold: true, size: 26 })];
+    const head = [run(`שאלה ${qn}`, { bold: true, size: T.qhead })];
     if (exam.showPoints && it.points) head.push(run(` (${it.points} נקודות)`, { size: 24 }));
     ch.push(P(head, { keepNext: true, pageBreakBefore: !!it.pageBreak, spacing: { before: 200, after: 80 } }));
     const imgs = (it.images || []).filter(im => getMedia(im.key));
-    const userImg = (im, maxW) => imageParagraph(getMedia(im.key), { maxW, widthCm: im.widthCm, alt: im.name });
+    const userImg = (im, maxW) => imageParagraph(getMedia(im.key), { maxW, widthCm: im.widthCm, alt: im.name, off: im });
     imgs.filter(im => im.position === 'above').forEach(im => ch.push(userImg(im, 640)));
     const content = renderBlocks(it.snap.blocks, ctx, {
       lines: teacher ? 0 : (Number(it.answerLines) || 0),
@@ -215,7 +218,7 @@ export function buildExamDocument(exam, { getMedia }, mode = 'student') {
       noKeep: imgs.some(im => im.position === 'side'),
     });
     const side = imgs.filter(im => im.position === 'side');
-    if (side.length) ch.push(sideBySide(content, side.map(im => imageParagraph(getMedia(im.key), { maxW: 250, widthCm: Math.min(im.widthCm, 6.5), alt: im.name }))));
+    if (side.length) ch.push(sideBySide(content, side.map(im => imageParagraph(getMedia(im.key), { maxW: 250, widthCm: Math.min(im.widthCm, 6.5), alt: im.name, off: { ...im, widthCm: Math.min(im.widthCm, 6.5) }, availCm: 5.8 }))));
     else ch.push(...content);
     imgs.filter(im => im.position === 'below').forEach(im => ch.push(userImg(im, 640)));
     if (teacher) ch.push(...rubricBox(it, ctx));
@@ -232,10 +235,10 @@ export function buildExamDocument(exam, { getMedia }, mode = 'student') {
 
   return new Document({
     creator: 'Health Exam Builder', title: exam.title || 'מבחן',
-    styles: { default: { document: { run: { font: FONT, size: BODY, rightToLeft: true, language: { value: 'he-IL', bidirectional: 'he-IL' } }, paragraph: { spacing: { after: 100, line: 300 } } } } },
+    styles: { default: { document: { run: { font: T.font, size: T.body, rightToLeft: true, language: { value: 'he-IL', bidirectional: 'he-IL' } }, paragraph: { spacing: { after: 100, line: 300 } } } } },
     sections: [{
       properties: { page: { margin: { top: 1134, bottom: 1134, left: 1134, right: 1134 } } },
-      footers: { default: new Footer({ children: [P([run('עמוד '), new TextRun({ children: [PageNumber.CURRENT], rightToLeft: true, font: FONT, size: 20 }), run(' מתוך '), new TextRun({ children: [PageNumber.TOTAL_PAGES], rightToLeft: true, font: FONT, size: 20 })], { alignment: AlignmentType.CENTER })] }) },
+      footers: { default: new Footer({ children: [P([run('עמוד '), new TextRun({ children: [PageNumber.CURRENT], rightToLeft: true, font: T.font, size: 20 }), run(' מתוך '), new TextRun({ children: [PageNumber.TOTAL_PAGES], rightToLeft: true, font: T.font, size: 20 })], { alignment: AlignmentType.CENTER })] }) },
       children: ch,
     }],
   });

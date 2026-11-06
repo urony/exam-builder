@@ -92,15 +92,25 @@ await no('A with fake admin claim writes bank', FAKECLAIM.doc('bank/q-000').set(
 await no('admin cannot edit admins doc via client', ADM.doc('admins/other').set({ x: 1 }));
 
 // --- הצעות ---
-await ok('A creates own suggestion', A.doc('suggestions/sg-new').set(sg('sg-new')));
-await ok('A creates suggestion with credit', A.doc('suggestions/sg-new2').set(sg('sg-new2', { credit: true, authorName: 'מורה', imageKeys: ['user/x'] })));
-await no('A suggestion in B name', A.doc('suggestions/sg-x1').set(sg('sg-x1', { authorUid: 'teacherB' })));
-await no('A suggestion pre-approved', A.doc('suggestions/sg-x2').set(sg('sg-x2', { status: 'approved' })));
-await no('A suggestion extra field', A.doc('suggestions/sg-x3').set(sg('sg-x3', { published: true })));
-await no('A suggestion id mismatch', A.doc('suggestions/sg-x4').set(sg('sg-other')));
-await no('A suggestion long name', A.doc('suggestions/sg-x5').set(sg('sg-x5', { authorName: 'x'.repeat(101) })));
-await no('A suggestion missing question', A.doc('suggestions/sg-x6').set({ id: 'sg-x6', status: 'pending', authorUid: 'teacherA', credit: false, authorName: '', submittedAt: 1 }));
-await no('A overwrites own existing suggestion', A.doc('suggestions/sg-existing').set(sg('sg-existing')));
+// יצירה תקפה = אצווה אחת: חלקי תמונה + עדכון מונה מכסה + ההצעה (מכסות ופרטי מדיה נבדקים לעומק ב-test-quota-rules.mjs)
+const quotaOf = async (c, u) => (await c.doc('suggestionQuota/' + u).get()).data() || { pending: 0, images: 0 };
+async function submit(ctx, uid, id, { imageKeys, parts = [1], quota, sgOver = {}, mediaOver = {}, tag = 'abc123' } = {}) {
+  const cur = await quotaOf(ctx, uid), keys = imageKeys || [], b = ctx.batch();
+  keys.forEach((key, idx) => { for (let p = 0; p < parts[idx]; p++) b.set(ctx.doc('suggestionMedia/' + id + '-' + tag + '-' + idx + '-' + p), { sgId: id, authorUid: uid, key, idx, part: p, parts: parts[idx], tag, data: bytes(p < parts[idx] - 1 ? 700000 : 100), ...mediaOver }); });
+  if (quota !== false) b.set(ctx.doc('suggestionQuota/' + uid), quota || { pending: cur.pending + 1, images: cur.images + keys.length, sg: id });
+  b.set(ctx.doc('suggestions/' + id), sg(id, { authorUid: uid, mediaTag: tag, ...(keys.length ? { imageKeys: keys } : {}), ...sgOver }));
+  return b.commit();
+}
+await ok('A creates own suggestion (with image)', submit(A, 'teacherA', 'sg-new', { imageKeys: ['user/a'] }));
+await ok('A creates suggestion with credit', submit(A, 'teacherA', 'sg-new2', { sgOver: { credit: true, authorName: 'מורה' } }));
+await no('A suggestion without quota update', submit(A, 'teacherA', 'sg-nq', { quota: false }));
+await no('A suggestion in B name', submit(A, 'teacherA', 'sg-x1', { sgOver: { authorUid: 'teacherB' } }));
+await no('A suggestion pre-approved', submit(A, 'teacherA', 'sg-x2', { sgOver: { status: 'approved' } }));
+await no('A suggestion extra field', submit(A, 'teacherA', 'sg-x3', { sgOver: { published: true } }));
+await no('A suggestion id mismatch', submit(A, 'teacherA', 'sg-x4', { sgOver: { id: 'sg-other' } }));
+await no('A suggestion long name', submit(A, 'teacherA', 'sg-x5', { sgOver: { authorName: 'x'.repeat(101) } }));
+await no('A suggestion missing question', (() => { const b = A.batch(); b.set(A.doc('suggestionQuota/teacherA'), { pending: 3, images: 1, sg: 'sg-x6' }); b.set(A.doc('suggestions/sg-x6'), { id: 'sg-x6', status: 'pending', authorUid: 'teacherA', credit: false, authorName: '', submittedAt: 1 }); return b.commit(); })());
+await no('A overwrites own existing suggestion', submit(A, 'teacherA', 'sg-existing'));
 await no('A approves own suggestion', A.doc('suggestions/sg-existing').update({ status: 'approved' }));
 await no('A deletes own suggestion', A.doc('suggestions/sg-existing').delete());
 await ok('A reads own suggestion', A.doc('suggestions/sg-existing').get());
@@ -109,53 +119,18 @@ await no('A reads B suggestion', A.doc('suggestions/sg-b').get());
 await no('A lists B suggestions', A.collection('suggestions').where('authorUid', '==', 'teacherB').get());
 await no('A lists all suggestions', A.collection('suggestions').get());
 await no('A publishes suggestion into bank', A.doc('bank/q-001').set({ kind: 'questions', items: [{ uid: 'p' }] }));
+await no('A overwrites own media', A.doc('suggestionMedia/sg-new-abc123-0-0').set({ sgId: 'sg-new', authorUid: 'teacherA', key: 'user/a', idx: 0, part: 0, parts: 1, tag: 'abc123', data: bytes(5) }));
 
-// --- תמונות הצעה ---
-// מזהה מסמך תקין: {sgId}-{tag}-{hash}-{part}
-const sm = (over = {}) => ({ sgId: 'sg-new', authorUid: 'teacherA', key: 'user/a', part: 0, parts: 1, tag: 'abc123', data: bytes(100), ...over });
-let smN = 100;   // מזהה ייחודי לכל ניסיון, כדי שכישלון יגיע מהכלל הנבדק ולא מכך שהמסמך כבר קיים
-const smId = (d = {}) => `${d.sgId || 'sg-new'}-${d.tag || 'abc123'}-h${++smN}-${d.part ?? 0}`;
-const put = (d, id) => A.doc('suggestionMedia/' + (id || smId(d))).set(d);
-await ok('A uploads own suggestion media', put(sm(), 'sg-new-abc123-h1-0'));
-await ok('A uploads part 1 of 3', put(sm({ part: 1, parts: 3, key: 'user/b' })));
-await no('A media in B name', put(sm({ authorUid: 'teacherB' })));
-await no('A media too big', put(sm({ data: bytes(900001), key: 'user/c' })));
-await no('A media extra field', put(sm({ extra: 1, key: 'user/d' })));
-await no('A media not bytes', put(sm({ data: 'text', key: 'user/e' })));
-await no('A media parts absurd', put(sm({ parts: 999, key: 'user/f' })));
-await no('A media parts 21', put(sm({ parts: 21, key: 'user/f2' })));
-await ok('A media parts 20, last part 19', put(sm({ parts: 20, part: 19, key: 'user/f3' })));
-await no('A media parts zero', put(sm({ parts: 0, part: 0, key: 'user/g' })));
-await no('A media parts negative', put(sm({ parts: -1, part: 0, key: 'user/g2' })));
-await no('A media part == parts', put(sm({ part: 1, parts: 1, key: 'user/h' })));
-await no('A media part > parts', put(sm({ part: 5, parts: 2, key: 'user/h2' })));
-await no('A media part negative', put(sm({ part: -1, key: 'user/h3' })));
-await no('A media part not int', put(sm({ part: 'x', key: 'user/i' })));
-await no('A media part float', put(sm({ part: 0.5, parts: 2, key: 'user/i2' }), 'sg-new-abc123-h1-0.5'));
-await no('A media parts float', put(sm({ parts: 1.5, key: 'user/i3' })));
-await no('A media missing tag', (() => { const d = sm({ key: 'user/j' }); delete d.tag; return put(d, 'sg-new-x-h1-0'); })());
-await no('A media tag not string', put(sm({ tag: 7, key: 'user/j2' }), 'sg-new-7-h1-0'));
-await no('A media tag with slash/regex chars', put(sm({ tag: 'a.*', key: 'user/j3' }), 'sg-new-a.*-h1-0'));
-await no('A media empty key', put(sm({ key: '' })));
-await no('A media key too long', put(sm({ key: 'k'.repeat(301) })));
-await no('A media sgId not sg- prefixed', put(sm({ sgId: 'other-1', key: 'user/k' })));
-await no('A media sgId not string', put(sm({ sgId: 5, key: 'user/k2' }), 'x-abc123-h1-0'));
-await no('A media doc id not linked to sgId', put(sm({ key: 'user/l' }), 'sm-random'));
-await no('A media doc id wrong tag', put(sm({ key: 'user/l2' }), 'sg-new-zzz999-h1-0'));
-await no('A media doc id wrong part', put(sm({ key: 'user/l3' }), 'sg-new-abc123-h1-7'));
-await no('A media doc id of another suggestion', put(sm({ key: 'user/l4' }), 'sg-b-abc123-h1-0'));
-await no('A overwrites own media', put(sm({ key: 'user/m' }), 'sg-new-abc123-h1-0'));
-await no('A media in bank namespace', A.doc('bankMedia/sg-new-abc123-h1-0').set(sm()));
 await no('A reads B media', A.doc('suggestionMedia/sm-b').get());
-await ok('A reads own media', A.doc('suggestionMedia/sg-new-abc123-h1-0').get());
-await no('A deletes own media', A.doc('suggestionMedia/sg-new-abc123-h1-0').delete());
-await no('A updates own media', A.doc('suggestionMedia/sg-new-abc123-h1-0').update({ data: bytes(3) }));
+await ok('A reads own media', A.doc('suggestionMedia/sg-new-abc123-0-0').get());
+await no('A deletes own media', A.doc('suggestionMedia/sg-new-abc123-0-0').delete());
+await no('A updates own media', A.doc('suggestionMedia/sg-new-abc123-0-0').update({ data: bytes(3) }));
 await no('A lists all suggestionMedia', A.collection('suggestionMedia').get());
 await ok('A lists own suggestionMedia', A.collection('suggestionMedia').where('authorUid', '==', 'teacherA').get());
 
 // --- מורה ב׳ ---
 await no('B reads A suggestion', B.doc('suggestions/sg-existing').get());
-await no('B reads A media', B.doc('suggestionMedia/sg-new-abc123-h1-0').get());
+await no('B reads A media', B.doc('suggestionMedia/sg-new-abc123-0-0').get());
 await no('B reads hidden bank content', B.doc('bankPrivate/qh-000').get());
 await no('B reads hidden media', B.doc('bankMedia/m-hidden').get());
 await ok('B reads own', B.doc('suggestions/sg-b').get());
@@ -167,7 +142,7 @@ await ok('admin writes bankMedia', ADM.doc('bankMedia/m3').set({ key: 'k3', data
 await ok('admin deletes bank doc', ADM.doc('bank/q-001').delete());
 await ok('admin lists all suggestions', ADM.collection('suggestions').get());
 await ok('admin reads A suggestion', ADM.doc('suggestions/sg-existing').get());
-await ok('admin reads A media', ADM.doc('suggestionMedia/sg-new-abc123-h1-0').get());
+await ok('admin reads A media', ADM.doc('suggestionMedia/sg-new-abc123-0-0').get());
 await ok('admin reads bankPrivate', ADM.doc('bankPrivate/qh-000').get());
 await ok('admin lists bankPrivate', ADM.collection('bankPrivate').get());
 await ok('admin writes bankPrivate', ADM.doc('bankPrivate/qh-001').set({ kind: 'questions', json: '[]' }));

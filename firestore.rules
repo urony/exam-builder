@@ -45,6 +45,32 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // מכסות הגשה למורה (נאכפות כאן, לא בדפדפן): עד 50 הצעות ממתינות ועד 30 תמונות בהצעות ממתינות, ועד 3 תמונות בכל הצעה.
+    // מונה suggestionQuota/{uid} = { pending, images, sg }. מורה יכול לכתוב אותו רק באותה כתיבה-אצווה (batch) שבה נוצרת הצעה חדשה, והוא חייב לגדול
+    // בדיוק ב-1 (הצעות) וב-מספר התמונות של ההצעה (תמונות). הכללים נבדקים מול המצב המאושר בשרת, לכן הגשות מקבילות (כמה לשוניות) לא עוקפות:
+    // השנייה רואה את המונה שכבר עודכן והעדכון שהכינה אינו תואם -> נדחית. מנהל פטור (כותב את המונה לצורך הפחתה כשהצעה נסגרת).
+    function quotaPath(uid) { return /databases/$(database)/documents/suggestionQuota/$(uid); }
+    function quotaBefore(uid) { return exists(quotaPath(uid)) ? get(quotaPath(uid)).data : {'pending': 0, 'images': 0}; }
+    function quotaStepOk(sgId) {
+      let after = getAfter(quotaPath(request.auth.uid)).data;
+      let before = quotaBefore(request.auth.uid);
+      return after.sg == sgId
+        && after.pending == before.get('pending', 0) + 1 && after.pending <= 50
+        && after.images == before.get('images', 0) + request.resource.data.get('imageKeys', []).size() && after.images <= 30;
+    }
+    match /suggestionQuota/{uid} {
+      allow get, list: if isOwner(uid) || isAdmin();
+      allow create, update: if (isOwner(uid)
+          && request.resource.data.keys().hasOnly(['pending', 'images', 'sg'])
+          && request.resource.data.sg is string && request.resource.data.sg.matches('^sg-[A-Za-z0-9_.:-]{1,150}$')
+          && !exists(/databases/$(database)/documents/suggestions/$(request.resource.data.sg))
+          && existsAfter(/databases/$(database)/documents/suggestions/$(request.resource.data.sg))
+          && getAfter(/databases/$(database)/documents/suggestions/$(request.resource.data.sg)).data.authorUid == uid
+          && request.resource.data.pending is int && request.resource.data.images is int)
+        || isAdmin();
+      allow delete: if isAdmin();
+    }
+
     // הצעות שאלות. יצירה: הבעלים בלבד, סטטוס pending בלבד, ללא שדות מיותרים.
     // קריאה: הבעלים או מנהל. עדכון/מחיקה (אישור, דחייה): מנהל בלבד. מורה לא יכול לשנות הצעה אחרי שליחתה.
     match /suggestions/{id} {
@@ -56,7 +82,8 @@ service cloud.firestore {
         && request.resource.data.credit is bool
         && request.resource.data.authorName is string && request.resource.data.authorName.size() <= 100
         && request.resource.data.questionJson is string && request.resource.data.questionJson.size() <= 900000
-        && (!('imageKeys' in request.resource.data) || (request.resource.data.imageKeys is list && request.resource.data.imageKeys.size() <= 20));
+        && (!('imageKeys' in request.resource.data) || (request.resource.data.imageKeys is list && request.resource.data.imageKeys.size() <= 3))
+        && (quotaStepOk(id) || isAdmin());
       allow get, list: if signedIn() && (resource.data.authorUid == request.auth.uid || isAdmin());
       allow update, delete: if isAdmin();
     }
@@ -64,16 +91,25 @@ service cloud.firestore {
     // תמונות של הצעות (המנהל לא יכול לקרוא Drive של מורה, לכן המורה שולח עותק של התמונה עם ההצעה).
     match /suggestionMedia/{id} {
       allow create: if isOwner(request.resource.data.authorUid)
-        && request.resource.data.keys().hasOnly(['sgId', 'authorUid', 'key', 'part', 'parts', 'data', 'tag'])
+        && request.resource.data.keys().hasOnly(['sgId', 'authorUid', 'key', 'part', 'parts', 'data', 'tag', 'idx'])
         && request.resource.data.sgId is string && request.resource.data.sgId.matches('^sg-[A-Za-z0-9_.:-]{1,150}$')
         && request.resource.data.key is string && request.resource.data.key.size() > 0 && request.resource.data.key.size() <= 300
         && request.resource.data.tag is string && request.resource.data.tag.size() > 0 && request.resource.data.tag.size() <= 20
         && request.resource.data.part is int && request.resource.data.parts is int
-        && request.resource.data.parts >= 1 && request.resource.data.parts <= 20
+        && request.resource.data.parts >= 1 && request.resource.data.parts <= 3
+        && request.resource.data.idx is int && request.resource.data.idx >= 0 && request.resource.data.idx < 3
         && request.resource.data.part >= 0 && request.resource.data.part < request.resource.data.parts
         && request.resource.data.tag.matches('^[A-Za-z0-9]{1,20}$')
-        && id.matches('^' + request.resource.data.sgId + '-' + request.resource.data.tag + '-.*-' + string(request.resource.data.part) + '$')   // מזהה המסמך קשור להצעה, לשליחה ולמספר החלק
-        && request.resource.data.data is bytes && request.resource.data.data.size() <= 900000;
+        && id == request.resource.data.sgId + '-' + request.resource.data.tag + '-' + string(request.resource.data.idx) + '-' + string(request.resource.data.part)   // מזהה קבוע: לכל הצעה לכל היותר 3 תמונות x 3 חלקים
+        && request.resource.data.data is bytes && request.resource.data.data.size() <= 700000
+        // כל חלק שאינו אחרון הוא בדיוק 700000 בתים; האחרון משלים עד 2MB (2,097,152) לכל היותר לתמונה
+        && ((request.resource.data.part < request.resource.data.parts - 1 && request.resource.data.data.size() == 700000)
+        || (request.resource.data.part == request.resource.data.parts - 1 && request.resource.data.data.size() <= 2097152 - 700000 * (request.resource.data.parts - 1)))
+        && !exists(/databases/$(database)/documents/suggestions/$(request.resource.data.sgId))   // רק יחד עם יצירת ההצעה (לא תוספת להצעה קיימת)
+        // חייב להיות קשור להצעה שנוצרת באותה אצווה: מפתח התמונה הוא ה-idx ברשימת התמונות של ההצעה, והתג זהה
+        && getAfter(/databases/$(database)/documents/suggestions/$(request.resource.data.sgId)).data.authorUid == request.auth.uid
+        && getAfter(/databases/$(database)/documents/suggestions/$(request.resource.data.sgId)).data.get('mediaTag', '') == request.resource.data.tag
+        && getAfter(/databases/$(database)/documents/suggestions/$(request.resource.data.sgId)).data.get('imageKeys', [])[request.resource.data.idx] == request.resource.data.key;
       allow get, list: if signedIn() && (resource.data.authorUid == request.auth.uid || isAdmin());
       allow update, delete: if isAdmin();
     }

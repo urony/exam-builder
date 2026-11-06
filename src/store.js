@@ -8,6 +8,7 @@
 //   putMedia(key, bytes)  -> שמירת תמונה של משתמש (קבועה, נגישה גם ממחשב אחר בתשתית הענן)
 //   importPackage(parsed) / removePackage(id)   (ממשק מנהל; בענן – רק מנהל)
 //   loadPersonal() / savePersonalQuestion(q) / deletePersonalQuestion(uid)   (מאגר אישי; בענן: Google Drive של המורה)
+//   loadUsage() / saveUsage(usage)   (סימון שאלות שנעשה בהן שימוש; אישי: בענן Drive של המורה)
 //   submitSuggestion(q, {credit, authorName}) / loadSuggestions()            (הצעה למאגר המרכזי; בענן: Firestore, כתיבה בלבד למורה)
 //
 // יעד ענן (ממתין לאישור): נתונים אישיים (מבחנים, שאלות אישיות, תמונות) -> Drive appDataFolder של המורה;
@@ -26,6 +27,10 @@ export const localStore = {
   putMedia: (key, data) => db.put('media', { key, data }),
   async getMedia(key) { return (await db.getOne('media', key))?.data || null; },
   async listMediaKeys() { return (await db.getAll('media')).map(m => m.key); },
+  async loadUsage() { return (await db.getOne('meta', 'usage'))?.value || null; },
+  async saveUsage(value) { await db.put('meta', { key: 'usage', value }); },
+  async loadUsage() { return (await db.getOne('meta', 'usage'))?.value || null; },
+  async saveUsage(value) { await db.put('meta', { key: 'usage', value }); },
   loadPersonal: () => db.getAll('personal'),
   savePersonalQuestion: q => db.put('personal', JSON.parse(JSON.stringify(q))),
   deletePersonalQuestion: uid => db.del('personal', uid),

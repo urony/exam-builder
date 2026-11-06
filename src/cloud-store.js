@@ -5,6 +5,8 @@
 // למה JSON בתוך שדה טקסט: Firestore אוסר מערכים מקוננים (טבלאות בשאלות הן מערך של מערכים).
 // הרשאות נאכפות רק בכללי Firestore (firestore.rules); בדיקות isAdmin כאן הן נוחות לממשק ולא אבטחה.
 const enc = new TextEncoder();
+import { mergeUsage, normalizeUsage } from './usage.js';
+import { LIMITS, QUOTA_NOTE } from './quota.js';
 const strip = o => JSON.parse(JSON.stringify(o));
 const sizeOf = o => enc.encode(JSON.stringify(o)).length;
 const MAX_CHUNK_BYTES = 600_000, MAX_CHUNK_COUNT = 60, PART_BYTES = 700_000, MAX_JSON = 900_000;
@@ -232,7 +234,7 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
   }
 
   // ---------------- תור שמירה ממתין (Drive אישי) ----------------
-  const OB = { exam: id => 'exam:' + id, pq: u => 'pq:' + u, media: k => 'media:' + k, delExam: id => 'del-exam:' + id, delPq: u => 'del-pq:' + u };
+  const OB = { exam: id => 'exam:' + id, pq: u => 'pq:' + u, media: k => 'media:' + k, delExam: id => 'del-exam:' + id, delPq: u => 'del-pq:' + u, usage: 'usage:me' };
   async function runOutboxEntry(key, val) {
     if (key.startsWith('exam:')) {
       // לא דורסים גרסה חדשה יותר שנשמרה בינתיים (למשל ממחשב אחר)
@@ -241,6 +243,7 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
     }
     else if (key.startsWith('pq:')) await drive.putJson(`pq-${val.uid}.json`, val);
     else if (key.startsWith('media:')) await drive.putBytes(mediaName(key.slice(6)), val, val[0] === 0x89 ? 'image/png' : 'image/jpeg');
+    else if (key === 'usage:me') { const cur = await drive.getJson('usage.json'); await drive.putJson('usage.json', mergeUsage(cur, val)); }
     else if (key.startsWith('del-exam:')) await drive.remove(`exam-${key.slice(9)}.json`);
     else if (key.startsWith('del-pq:')) await drive.remove(`pq-${key.slice(7)}.json`);
   }
@@ -297,6 +300,14 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
     },
     savePersonalQuestion: q => safe(OB.pq(q.uid), strip(q)),
     async deletePersonalQuestion(u) { await outbox.del(OB.pq(u)); return safe(OB.delPq(u), 1); },
+    async loadUsage() {
+      await flush().catch(() => {});
+      let remote = null;
+      try { remote = await drive.getJson('usage.json'); } catch (e) { if (!(e instanceof SyntaxError)) throw e; onSyncError({ where: 'drive-corrupt', error: e, file: 'usage.json' }); }
+      const pend = await outbox.get(OB.usage);
+      return mergeUsage(remote, pend);
+    },
+    async saveUsage(u) { const pend = await outbox.get(OB.usage); return safe(OB.usage, mergeUsage(pend, normalizeUsage(u))); },
     async putUserMedia(key, data) { return safe(OB.media(key), data); },
     async getUserMedia(key) { const pend = await outbox.get(OB.media(key)); return pend || drive.getBytes(mediaName(key)); },
   };
@@ -305,6 +316,7 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
     loadExams: () => local.loadExams(), saveExam: e => local.saveExam(e), deleteExam: id => local.deleteExam(id),
     loadPersonal: () => local.loadPersonal(), savePersonalQuestion: q => local.savePersonalQuestion(q), deletePersonalQuestion: u => local.deletePersonalQuestion(u),
     putUserMedia: (k, d) => local.putMedia(k, d), getUserMedia: k => local.getMedia(k),
+    loadUsage: () => local.loadUsage(), saveUsage: u => local.saveUsage(u),
   };
 
   return {
@@ -316,6 +328,7 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
 
     // ----- אישי -----
     loadExams: personalImpl.loadExams, saveExam: personalImpl.saveExam, deleteExam: personalImpl.deleteExam,
+    loadUsage: personalImpl.loadUsage, saveUsage: personalImpl.saveUsage,
     loadPersonal: personalImpl.loadPersonal, savePersonalQuestion: personalImpl.savePersonalQuestion, deletePersonalQuestion: personalImpl.deletePersonalQuestion,
 
     // ----- מדיה -----
@@ -426,23 +439,42 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
     },
 
     // ----- הצעות -----
+    // הגשה אטומית אחת (אצווה): חלקי התמונות + עדכון מונה המכסה + ההצעה עצמה. כללי Firestore אוכפים את המכסות (ראו firestore.rules).
     async submitSuggestion(q, { credit = false, authorName = '', getMedia } = {}) {
       const { fs, db } = await firestore();
       const tag = Math.random().toString(36).slice(2, 8);
       const doc = suggestionDoc(q, { uid, credit, authorName, tag });
-      const ops = [];
-      for (const key of doc.imageKeys) {
+      if (!isAdmin && doc.imageKeys.length > LIMITS.imagesPerSuggestion) throw tmpl('quota-images-per', `אפשר לצרף עד ${LIMITS.imagesPerSuggestion} תמונות לכל הצעה`);
+      const media = [];
+      for (const [idx, key] of doc.imageKeys.entries()) {
         const data = (getMedia && getMedia(key)) || await personalImpl.getUserMedia(key);
         if (!data) throw tmpl('missing-media', 'חסרה תמונה בשאלה – לא ניתן לשלוח');
-        const h = await hashKey(key); const parts = Math.max(1, Math.ceil(data.length / PART_BYTES));
-        for (let i = 0; i < parts; i++) {
-          const slice = data.subarray(i * PART_BYTES, (i + 1) * PART_BYTES);
-          ops.push({ type: 'set', col: 'suggestionMedia', id: `${doc.id}-${tag}-${h}-${i}`, data: { sgId: doc.id, authorUid: uid, key, part: i, parts, data: fs.Bytes.fromUint8Array(slice), tag }, bytes: slice.length + 200 });
+        if (!isAdmin && data.length > LIMITS.imageBytes) throw tmpl('quota-image-size', 'התמונה גדולה מדי להצעה (עד 2MB)');
+        media.push({ key, idx, data });
+      }
+      const quotaRef = fs.doc(db, 'suggestionQuota', uid);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const cur = isAdmin ? null : ((await fs.getDoc(quotaRef)).data() || { pending: 0, images: 0 });
+        const batch = fs.writeBatch(db);
+        for (const m of media) {
+          const parts = Math.max(1, Math.ceil(m.data.length / PART_BYTES));
+          for (let i = 0; i < parts; i++) {
+            const slice = m.data.subarray(i * PART_BYTES, (i + 1) * PART_BYTES);
+            batch.set(fs.doc(db, 'suggestionMedia', `${doc.id}-${tag}-${m.idx}-${i}`), { sgId: doc.id, authorUid: uid, key: m.key, idx: m.idx, part: i, parts, data: fs.Bytes.fromUint8Array(slice), tag });
+          }
+        }
+        if (cur) batch.set(quotaRef, { pending: (cur.pending || 0) + 1, images: (cur.images || 0) + doc.imageKeys.length, sg: doc.id });
+        batch.set(fs.doc(db, 'suggestions', doc.id), doc);
+        try { await batch.commit(); return fromSuggestionDoc(doc); }
+        catch (e) {
+          if (e.code !== 'permission-denied' || isAdmin) throw e;
+          const now = (await fs.getDoc(quotaRef)).data() || { pending: 0, images: 0 };
+          if (now.pending !== cur.pending || now.images !== cur.images) continue;                 // המונה השתנה בינתיים (לשונית אחרת): ניסיון חוזר אחד
+          if ((now.pending || 0) >= LIMITS.pending || (now.images || 0) + doc.imageKeys.length > LIMITS.imagesTotal) throw Object.assign(tmpl('quota-exceeded', QUOTA_NOTE), { cause: e });
+          throw e;
         }
       }
-      await commit(ops);                                          // קודם התמונות, כדי שהמנהל לא יראה הצעה בלי תמונה
-      await fs.setDoc(fs.doc(db, 'suggestions', doc.id), doc);   // ורק אז ההצעה עצמה (pending)
-      return fromSuggestionDoc(doc);
+      throw tmpl('quota-exceeded', QUOTA_NOTE);
     },
     async loadSuggestions() {
       // כללי Firestore עשויים לחסום: ההצעות הן תוספת, אסור שיכשילו כניסה ושימוש ב-Drive (מדווח, לא מוסתר)
@@ -453,9 +485,16 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
       } catch (err) { onSyncError({ where: 'suggestions', error: err }); return []; }
     },
     // מנהל: אישור/דחייה/סימון טיוטה. כתיבה למסמך הקיים (עדכון) – מותר רק למנהל.
+    // סגירת הצעה ממתינה (אישור/דחייה/טיוטה) מפחיתה את מונה המכסה של המורה באותה עסקה.
     async saveSuggestion(s) {
       needAdmin(); const { fs, db } = await firestore();
-      await fs.setDoc(fs.doc(db, 'suggestions', s.id), toSuggestionDoc(s));
+      await fs.runTransaction(db, async tx => {
+        const sRef = fs.doc(db, 'suggestions', s.id), prev = await tx.get(sRef);
+        const closing = prev.exists() && prev.data().status === 'pending' && s.status !== 'pending' && prev.data().authorUid;
+        let qRef, qd; if (closing) { qRef = fs.doc(db, 'suggestionQuota', prev.data().authorUid); qd = await tx.get(qRef); }
+        tx.set(sRef, toSuggestionDoc(s));
+        if (closing && qd.exists()) tx.set(qRef, { pending: Math.max(0, (qd.data().pending || 0) - 1), images: Math.max(0, (qd.data().images || 0) - (prev.data().imageKeys?.length || 0)), sg: '' });
+      });
       await audit('suggestion-' + s.status, s.id, s.draftUid || '');
     },
     // מנהל: מחיקה לצמיתות של הצעה ממתינה/שנדחתה + כל חלקי המדיה שלה (sgId זהה בלבד). שאלה שפורסמה במאגר לא נוגעים בה.
@@ -471,9 +510,36 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
         await audit('delete-suggestion-partial', s.id, `media ${deleted}/${snap.docs.length}`);
         throw tmpl('partial-delete', `המחיקה לא הושלמה: נמחקו ${deleted} מתוך ${snap.docs.length} חלקי תמונה. ההצעה עדיין קיימת, אפשר לנסות שוב.`, { remaining: failed });
       }
-      await fs.deleteDoc(fs.doc(db, 'suggestions', s.id));
+      await fs.runTransaction(db, async tx => {
+        const sRef = fs.doc(db, 'suggestions', s.id), prev = await tx.get(sRef);
+        const closing = prev.exists() && prev.data().status === 'pending' && prev.data().authorUid;
+        let qRef, qd; if (closing) { qRef = fs.doc(db, 'suggestionQuota', prev.data().authorUid); qd = await tx.get(qRef); }
+        tx.delete(sRef);
+        if (closing && qd.exists()) tx.set(qRef, { pending: Math.max(0, (qd.data().pending || 0) - 1), images: Math.max(0, (qd.data().images || 0) - (prev.data().imageKeys?.length || 0)), sg: '' });
+      });
       await audit('delete-suggestion', s.id, `media ${deleted}; status ${s.status}`);
       return { mediaDeleted: deleted };
+    },
+    // מונה המכסה של המורה (קריאה בלבד; לתצוגה). האכיפה בכללי Firestore.
+    async myQuota() { try { const { fs, db } = await firestore(); return (await fs.getDoc(fs.doc(db, 'suggestionQuota', uid))).data() || { pending: 0, images: 0 }; } catch { return null; } },
+    // מנהל: יישור המונים לפי ההצעות בפועל (תיקון סטייה, למשל הצעות ישנות מלפני המכסות או מחיקה ידנית בקונסולה). לא נוגע בהצעות.
+    async reconcileQuotas() {
+      needAdmin(); const { fs, db } = await firestore();
+      const want = new Map();
+      for (const d of (await fs.getDocs(fs.collection(db, 'suggestions'))).docs) {
+        const v = d.data(); if (v.status !== 'pending' || !v.authorUid) continue;
+        const w = want.get(v.authorUid) || { pending: 0, images: 0 }; w.pending++; w.images += (v.imageKeys || []).length; want.set(v.authorUid, w);
+      }
+      const have = new Map((await fs.getDocs(fs.collection(db, 'suggestionQuota'))).docs.map(d => [d.id, d.data()]));
+      let fixed = 0;
+      for (const id of new Set([...want.keys(), ...have.keys()])) {
+        const w = want.get(id) || { pending: 0, images: 0 }, h = have.get(id);
+        if (h && h.pending === w.pending && h.images === w.images) continue;
+        if (!h && !w.pending) continue;
+        await fs.setDoc(fs.doc(db, 'suggestionQuota', id), { ...w, sg: '' }); fixed++;
+      }
+      if (fixed) await audit('reconcile-quotas', '', String(fixed));
+      return { fixed };
     },
     // מנהל: טוען את תמונות ההצעה (נשלחו על ידי המורה) -> Map<key, bytes>
     async getSuggestionMedia(s) {

@@ -268,6 +268,63 @@ const fb = await flaky.loadBank();
 t(fb.questions[0].uid === 'local-q' && /אינו זמין/.test(fb.warning), 'רשת נפלה: מאגר מקומי + אזהרה גלויה');
 t((await flaky.loadSuggestions()).length === 0 && flaky.errors.some(e => e.where === 'suggestions'), 'רשת נפלה: הצעות ריקות + שגיאה מדווחת');
 
+// 7. מכסות הגשה דרך הלקוח האמיתי: ספירה, תקרות, שחרור בסגירה/מחיקה, מנהל פטור, יישור מונים
+{
+  const Q = mk('quotaT'), QADM = ADMIN;
+  const qdoc = async u => (await ffs.getDoc(ffs.doc(adb, 'suggestionQuota', u))).data();
+  const mkQ = (id, nImgs = 0) => ({ uid: id, kind: 'personal', domainId: 'cardiology', typeId: 'open', title: id, blocks: [{ type: 'text', text: id }, ...Array.from({ length: nImgs }, (_, i) => ({ type: 'image', mediaKey: 'user/' + id + '-' + i }))], rubric: null });
+  const imgs = new Map(); const gm = k => { if (!imgs.has(k)) imgs.set(k, Uint8Array.from({ length: 3000 }, (_, i) => (i + k.length) & 255)); return imgs.get(k); };
+  await Q.submitSuggestion(mkQ('qa1', 2), { getMedia: gm });
+  t(JSON.stringify(await qdoc('quotaT')) === JSON.stringify({ pending: 1, images: 2, sg: 'sg-qa1' }), 'מונה מכסה עודכן באותה הגשה: ' + JSON.stringify(await qdoc('quotaT')));
+  await rejectsCode(Q.submitSuggestion(mkQ('qa4', 4), { getMedia: gm }), 'quota-images-per');
+  const tooBig = new Map([['user/qa5-0', new Uint8Array(2 * 1024 * 1024 + 1)]]);
+  await rejectsCode(Q.submitSuggestion(mkQ('qa5', 1), { getMedia: k => tooBig.get(k) }), 'quota-image-size');
+  t((await qdoc('quotaT')).pending === 1, 'הגשות שנדחו לא שינו את המונה');
+  const exact = new Map([['user/qa6-0', Uint8Array.from({ length: 2 * 1024 * 1024 }, (_, i) => i & 255)]]);
+  await Q.submitSuggestion(mkQ('qa6', 1), { getMedia: k => exact.get(k) });
+  t((await ADMIN.getSuggestionMedia((await ADMIN.loadSuggestions()).find(x => x.id === 'sg-qa6'))).get('user/qa6-0').length === 2 * 1024 * 1024, 'תמונה של בדיוק 2MB נשלחה ונקראת במלואה');
+  // עקיפת הלקוח: קריאה ישירה ל-Firestore בלי מונה / עם מונה מזויף (כמו משתמש שמשנה את הקוד בדפדפן)
+  const { fs: qf, db: qd } = fsFor('quotaT');
+  await rejectsCode(qf.setDoc(qf.doc(qd, 'suggestions', 'sg-bypass'), { id: 'sg-bypass', status: 'pending', authorUid: 'quotaT', credit: false, authorName: '', submittedAt: 1, questionJson: '{}' }), 'permission-denied');
+  await rejectsCode(qf.setDoc(qf.doc(qd, 'suggestionQuota', 'quotaT'), { pending: 0, images: 0, sg: 'sg-qa1' }), 'permission-denied');
+  t((await qdoc('quotaT')).pending === 2, 'ניסיונות עקיפה ישירים נחסמו והמונה נשאר ' + (await qdoc('quotaT')).pending);
+  // תקרת 50: ממלאים עד הקצה דרך הלקוח
+  for (let i = 0; i < 48; i++) await Q.submitSuggestion(mkQ('qf' + i), { getMedia: gm });
+  t((await qdoc('quotaT')).pending === 50, 'הגענו ל-50 הצעות ממתינות');
+  await rejectsCode(Q.submitSuggestion(mkQ('qover'), { getMedia: gm }), 'quota-exceeded');
+  t((await Q.loadSuggestions()).length === 50 && (await qdoc('quotaT')).pending === 50, 'ההצעה ה-51 נדחתה; 50 נשארו');
+  // מקביל: שני לקוחות (שתי לשוניות) של אותו מורה מגישים בו-זמנית כשנותר מקום אחד
+  await QADM.saveSuggestion({ ...(await QADM.loadSuggestions()).find(x => x.id === 'sg-qf0'), status: 'rejected' });
+  t((await qdoc('quotaT')).pending === 49, 'דחיית הצעה על ידי מנהל משחררת מקום במכסה');
+  const tab2 = mk('quotaT');
+  const race = await Promise.allSettled([Q.submitSuggestion(mkQ('qr1'), { getMedia: gm }), tab2.submitSuggestion(mkQ('qr2'), { getMedia: gm })]);
+  t(race.filter(r => r.status === 'fulfilled').length === 1 && (await qdoc('quotaT')).pending === 50, 'שתי לשוניות במקביל על מקום אחרון: רק הגשה אחת עברה (' + race.map(r => r.status).join(',') + ')');
+  const loser = race.find(r => r.status === 'rejected'); t(loser.reason.code === 'quota-exceeded' || loser.reason.code === 'permission-denied', 'הלשונית שהפסידה קיבלה כשל מסודר');
+  // מחיקה ואישור משחררים; אישור/דחייה של הצעה שכבר נסגרה לא מפחית פעמיים
+  const all = await QADM.loadSuggestions(); const sgQf1 = all.find(x => x.id === 'sg-qf1'), sgQa1 = all.find(x => x.id === 'sg-qa1');
+  await QADM.deleteSuggestion({ ...sgQf1, status: 'pending' });
+  t((await qdoc('quotaT')).pending === 49, 'מחיקת הצעה ממתינה משחררת מקום');
+  await QADM.saveSuggestion({ ...sgQa1, status: 'approved' });
+  const afterA = await qdoc('quotaT'); t(afterA.pending === 48, 'אישור משחרר הצעה (ממתינות 48): ' + JSON.stringify(afterA));
+  const imgBefore = afterA.images;
+  await QADM.saveSuggestion({ ...sgQa1, status: 'rejected' });
+  t((await qdoc('quotaT')).pending === 48 && (await qdoc('quotaT')).images === imgBefore, 'שינוי סטטוס חוזר של הצעה שכבר נסגרה לא מפחית שוב');
+  // התנגשות במונה: מורה לא יכול להוריד את המונה של עצמו
+  await rejectsCode(qf.setDoc(qf.doc(qd, 'suggestionQuota', 'quotaT'), { pending: 0, images: 0, sg: 'sg-qf2' }), 'permission-denied');
+  // יישור מונים: סטייה (למשל מחיקה ידנית בקונסולה) מתוקנת על ידי המנהל בלבד; נתוני אמת של הצעות לא משתנים
+  await env.withSecurityRulesDisabled(c => c.firestore().doc('suggestionQuota/quotaT').set({ pending: 7, images: 0, sg: '' }));
+  await rejectsCode(Q.reconcileQuotas(), 'not-admin');
+  const rc = await QADM.reconcileQuotas(); const real = (await QADM.loadSuggestions()).filter(x => x.authorUid === 'quotaT' && x.status === 'pending');
+  const fixed = await qdoc('quotaT');
+  t(rc.fixed >= 1 && fixed.pending === real.length && fixed.images === real.reduce((a, x) => a + (x.imageKeys?.length || 0), 0), 'יישור מונים תיקן את הסטייה: ' + JSON.stringify(fixed) + ' ממתינות בפועל ' + real.length);
+  // מנהל פטור: מגיש בלי מונה, ובלי תקרת 3 תמונות
+  for (let i = 0; i < 52; i++) await QADM.submitSuggestion(mkQ('adm' + i, i === 0 ? 3 : 0), { getMedia: gm });
+  t((await ffs.getDoc(ffs.doc(adb, 'suggestionQuota', 'ADMIN'))).exists() === false, 'מנהל: 52 הצעות ללא מכסה וללא מונה');
+  // מורה אחר לא מושפע
+  await A.submitSuggestion(mkQ('othera'), { getMedia: gm }); t((await qdoc('teacherA')).pending >= 1, 'מורה אחר ממשיך להגיש כרגיל');
+  t(await (async () => { try { return !!(await Q.myQuota()); } catch { return false; } })(), 'המורה קורא את המונה שלו');
+}
+
 await env.cleanup();
 console.log(`test-cloud-emulator: OK (${n} בדיקות מול אמולטור Firestore עם הכללים האמיתיים)`);
 process.exit(0);

@@ -80,21 +80,21 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
   async function readCentral() {
     const { fs, db } = await firestore();
     const meta = { rev: 0, packages: [], taxonomy: { domains: {}, types: {} }, media: [] };
-    const q = new Map(), c = new Map(); let privMedia = [], adm = null, admRaw = null;
+    const q = new Map(), c = new Map(); let privMedia = [], adm = null, admRaw = null; const raw = new Map(); let metaRev = 0;
     const take = (snap, isPriv) => {
       for (const d of snap.docs) {
         const v = d.data();
-        if (d.id === 'meta') { if (isPriv) privMedia = JSON.parse(v.json).media || []; else Object.assign(meta, JSON.parse(v.json)); }
+        if (d.id === 'meta') { if (isPriv) privMedia = JSON.parse(v.json).media || []; else { Object.assign(meta, JSON.parse(v.json)); metaRev = meta.rev || 0; } }
         else if (isPriv && d.id === 'adm') { admRaw = v.json; adm = JSON.parse(v.json); }
-        else if (d.id.startsWith('q')) q.set(d.id, JSON.parse(v.json));
-        else if (d.id.startsWith('c')) c.set(d.id, JSON.parse(v.json));
+        else if (d.id.startsWith('q')) { q.set(d.id, JSON.parse(v.json)); raw.set(d.id, v.json); }
+        else if (d.id.startsWith('c')) { c.set(d.id, JSON.parse(v.json)); raw.set(d.id, v.json); }
       }
     };
     take(await fs.getDocs(fs.collection(db, 'bank')), false);
     if (isAdmin) take(await fs.getDocs(fs.collection(db, 'bankPrivate')), true);   // מורה לא מנסה לקרוא (ייחסם בכללים)
     dirty.clear();
     if (adm) for (const [id, items] of q) if (!privChunk(id)) for (const it of items) if (adm[it.uid]) Object.assign(it, adm[it.uid]);
-    st = mkSt(meta, q, c, privMedia); st.admJson = admRaw;
+    st = mkSt(meta, q, c, privMedia); st.admJson = admRaw; st.admBase = admRaw; st.raw = raw; st.metaRev = metaRev;
     return st;
   }
   const ensure = async () => st || readCentral();
@@ -128,6 +128,7 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
     st.admJson = json;
     return [{ type: 'set', col: 'bankPrivate', id: 'adm', data: { kind: 'adm', json }, bytes: json.length }];
   };
+  const peekOps = () => [...dirty].map(chunkOp);   // בדיקת עדכניות לפני כתיבת איורים (מונע איורים יתומים בקונפליקט)
   const dirtyOps = () => { const ops = [...dirty].map(chunkOp); dirty.clear(); return ops; };
   // מציב פריט בחבילה של הקבוצה המתאימה (priv=true -> bankPrivate). קיים באותה קבוצה -> מוחלף במקומו; עבר קבוצה -> מוסר מהישנה.
   function place(prefix, item, priv = false) {
@@ -171,10 +172,28 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
     return { ops, media };
   }
   // כתיבת כל השינויים הממתינים: חבילות ששונו + דגלי איורים (+ meta אם נראות איור השתנתה או נדרש במפורש)
+  // הגנה מפני דריסה: אם מישהו אחר (לשונית אחרת / מנהל אחר) שינה חבילה או meta מאז שנטענו, לא כותבים מעל. זורקים 'conflict' וצריך לטעון מחדש.
+  // לא אטומי לחלוטין (חלון של מילישניות בין הבדיקה לכתיבה), אבל מצמצם את הסיכון מ"כל משך ההפעלה" לרגע הכתיבה.
+  async function guard(ops) {
+    if (st.force) return;
+    const { fs, db } = await firestore(); const stale = [];
+    for (const o of ops) {
+      if (o.type === 'set' && o.col === 'bankMedia') continue;
+      const isChunk = /^(q|c)h?-/.test(o.id) && (o.col === 'bank' || o.col === 'bankPrivate');
+      const isAdm = o.col === 'bankPrivate' && o.id === 'adm', isMeta = o.col === 'bank' && o.id === 'meta';
+      if (!isChunk && !isAdm && !isMeta) continue;
+      const s = await fs.getDoc(fs.doc(db, o.col, o.id)); const cur = s.exists() ? s.data() : null;
+      if (isMeta) { if ((cur ? cur.rev || 0 : 0) !== (st.metaRev || 0)) stale.push('meta'); }
+      else if (isAdm) { if ((cur ? cur.json : null) !== (st.admBase ?? null)) stale.push('adm'); }
+      else if ((cur ? cur.json : null) !== (st.raw.get(o.id) ?? null)) stale.push(o.id);
+    }
+    if (stale.length) { st = null; throw tmpl('conflict', 'המאגר המרכזי שונה בינתיים במקום אחר (לשונית או מנהל אחר). לא נשמר דבר כדי לא לדרוס שינויים. טען מחדש ונסה שוב.'); }
+  }
+  const noteWritten = ops => { for (const o of ops) { if (o.col === 'bankMedia') continue; if (o.id === 'adm') st.admBase = o.data.json; else if (o.id === 'meta' && o.col === 'bank') st.metaRev = o.data.rev; else if (/^(q|c)h?-/.test(o.id)) { if (o.type === 'set') st.raw.set(o.id, o.data.json); else st.raw.delete(o.id); } } };
   async function persist({ withMeta = false } = {}) {
     const r = reconcile(); const ops = [...dirtyOps(), ...r.ops, ...admOp()];
-    await commit(ops); dropEmpty('q'); dropEmpty('c');
-    if (withMeta || r.media) await commit(metaOps());
+    await guard(ops); await commit(ops); noteWritten(ops); dropEmpty('q'); dropEmpty('c');
+    if (withMeta || r.media) { const m = metaOps(); await guard(m); await commit(m); noteWritten(m); }
   }
 
   // ---------------- איורי המאגר המרכזי ----------------
@@ -287,7 +306,7 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
     async putMedia(key, data) {
       if (isUser(key)) return personalImpl.putUserMedia(key, data);
       needAdmin(); await ensure();
-      const ops = await mediaOps(key, data); await commit(ops); await commit(metaOps());
+      const ops = await mediaOps(key, data); await commit(ops); const m = metaOps(); await guard(m); await commit(m); noteWritten(m);
     },
     async getMedia(key) {
       if (isUser(key)) return personalImpl.getUserMedia(key);
@@ -313,6 +332,8 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
       }
     },
     async loadTaxonomy() { await ensure(); return strip(st.meta.taxonomy); },
+    // כל מפתחות איורי המאגר המרכזי (כולל מוסתרים; מנהל). משמש לגיבוי שלם.
+    async listMediaKeys() { await ensure(); return [...st.media.keys()]; },
 
     // ----- מאגר מרכזי: כתיבה (מנהל בלבד; נאכף בכללי Firestore) -----
     async saveBankQuestion(q) {
@@ -325,7 +346,7 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
       await persist(); await audit('delete-question', u);
     },
     async saveTaxonomy(value) {
-      needAdmin(); await ensure(); st.meta.taxonomy = strip(value); await commit(metaOps()); await audit('save-taxonomy', '', Object.keys(value.domains || {}).length + ' domains');
+      needAdmin(); await ensure(); st.meta.taxonomy = strip(value); const m = metaOps(); await guard(m); await commit(m); noteWritten(m); await audit('save-taxonomy', '', Object.keys(value.domains || {}).length + ' domains');
     },
     async importPackage(parsed, opts) {
       needAdmin(); await ensure();
@@ -351,6 +372,7 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
       for (const c of cases) if (!existingC.has(c.uid)) { place('c', strip(c), true); res.casesAdded++; }   // פרטי עד ש-reconcile מוצא שאלה מפורסמת שמשתמשת בו
       for (const [key, data] of media) if (!st.media.has(key) || !opts) { ops.push(...await mediaOps(key, data)); res.mediaAdded++; }
       st.meta.packages = [...st.meta.packages.filter(p => p.id !== pkg.id), strip(pkg)];
+      await guard(peekOps());
       await commit(ops);                                  // קודם איורים (פרטיים)
       await persist({ withMeta: true });                  // חבילות שאלות/מקרים + דגלי איורים; meta אחרון: מצביע על מה שכבר נכתב
       await audit('import-package', pkg.id, JSON.stringify(res));
@@ -363,21 +385,23 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
       for (const x of [...st.c.values()].flat()) if (x.pkgId === id) unplace('c', x.uid);
       for (const k of [...st.media.keys()]) if (k.startsWith(id + '/')) ops.push(...mediaDeleteOps(k));
       st.meta.packages = st.meta.packages.filter(p => p.id !== id);
-      await commit(ops); await persist({ withMeta: true }); await audit('remove-package', id);
+      await guard(peekOps()); await commit(ops); await persist({ withMeta: true }); await audit('remove-package', id);
     },
     // שחזור מגיבוי: כותב את המצב החדש ואז מוחק שאריות. לא אטומי – לכן ממשק המנהל מוריד גיבוי בטיחות לפני כן.
-    async replaceCentral({ packages, questions, cases, media, taxonomy }) {
+    async replaceCentral({ packages, questions, cases, media, taxonomy, keepMediaKeys = [] }) {
       needAdmin(); const old = await readCentral();
       const oldQ = [...old.q.keys()], oldC = [...old.c.keys()], oldMedia = [...old.media.keys()];
       dirty.clear();
       st = mkSt({ rev: old.meta.rev, packages: strip(packages), taxonomy: strip(taxonomy || { domains: {}, types: {} }), media: [] }, new Map(), new Map());
-      st.admJson = old.admJson;
+      st.admJson = old.admJson; st.admBase = old.admBase; st.raw = new Map(); st.metaRev = old.metaRev; st.force = true;
       for (const q of questions) place('q', strip(q), !isPubQ(q));
       for (const c of cases) place('c', strip(c), true);                       // reconcile מפרסם רק מקרים שנדרשים לשאלה מפורסמת
       const ops = [];
       for (const [key, data] of media) if (!isUser(key)) ops.push(...await mediaOps(key, data));
+      // שחזור חלקי מגיבוי ישן בלי תמונות: תמונות שכבר קיימות בענן ושהתוכן מפנה אליהן נשמרות (לא נמחקות)
+      for (const k of keepMediaKeys) if (!media.has(k) && old.media.has(k)) st.media.set(k, { ...old.media.get(k) });
       await commit(ops);
-      await persist({ withMeta: true });
+      try { await persist({ withMeta: true }); } finally { st.force = false; }
       const del = [];
       for (const i of oldQ) if (!st.q.has(i)) del.push({ type: 'delete', col: colOf(i), id: i });
       for (const i of oldC) if (!st.c.has(i)) del.push({ type: 'delete', col: colOf(i), id: i });

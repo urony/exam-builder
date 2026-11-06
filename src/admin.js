@@ -1,6 +1,7 @@
 // ממשק מנהל (מקומי). אין כאן אבטחה אמיתית: הרשאות מנהל ייאכפו בשירות הנתונים (Firestore) כשיחובר.
 // כל הפעולות עוברות דרך store, כך שהחלפת התשתית לא תשנה את הממשק.
 import JSZip from 'jszip';
+import { buildBackup, parseBackup } from './backup.js';
 import { cellLines } from './clean.js';
 import { KIND_LABEL } from './adapter.js';
 import { BULK_FIELDS, EMPTY_BULK, chosen, planBulk, runBulk, describe } from './admin-bulk.js';
@@ -144,31 +145,30 @@ export function createAdmin(ctx) {
   }
 
   // ---------- פעולות ----------
-  async function makeBackup() {
-    const z = new JSZip();
-    const central = { version: 1, createdAt: new Date().toISOString(), packages: S.packages, questions: bankQs(), cases: [...S.cases.values()], taxonomy: await store.loadTaxonomy() };
-    z.file('central.json', JSON.stringify(central));
-    for (const [k, v] of S.media) if (!k.startsWith('user/')) z.file('media/' + encodeURIComponent(k), v);
-    return { blob: await z.generateAsync({ type: 'blob', compression: 'DEFLATE' }), central };
+  // גיבוי שלם: קורא מחדש את המאגר ומושך במפורש כל תמונה (בענן התמונות אינן בזיכרון). נכשל בקול רם אם משהו חסר.
+  async function makeBackup(onProgress) {
+    const bank = await store.loadBank();
+    if (bank.warning) throw new Error('המאגר המרכזי אינו זמין כרגע, לכן לא נוצר גיבוי (כדי לא לגבות מאגר חלקי).');
+    const taxonomy = await store.loadTaxonomy();
+    const r = await buildBackup({ JSZip, central: { packages: bank.packages, questions: bank.questions, cases: bank.cases, taxonomy }, listKeys: store.listMediaKeys && (() => store.listMediaKeys()), getMedia: k => store.getMedia(k), onProgress });
+    return { blob: new Blob([r.data], { type: 'application/zip' }), central: r.central, orphanFailed: r.orphanFailed };
   }
   function download(blob, name) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000); }
 
   async function restore(file) {
     try {
-      const z = await JSZip.loadAsync(await file.arrayBuffer());
-      const cf = z.file('central.json'); if (!cf) throw new Error('חסר central.json – לא קובץ גיבוי של המערכת');
-      const c = JSON.parse(await cf.async('string'));
-      if (c.version !== 1 || !Array.isArray(c.questions) || !Array.isArray(c.packages) || !Array.isArray(c.cases)) throw new Error('מבנה גיבוי לא תקין');
-      if (c.questions.some(q => !q.uid || !q.domainId || !Array.isArray(q.blocks))) throw new Error('שאלות לא תקינות בגיבוי');
-      const media = new Map();
-      for (const name of Object.keys(z.files).filter(n => n.startsWith('media/') && !z.files[n].dir)) media.set(decodeURIComponent(name.slice(6)), await z.file(name).async('uint8array'));
-      const missing = []; for (const q of c.questions) for (const b of q.blocks) if (b.mediaKey && !media.has(b.mediaKey)) missing.push(b.mediaKey);
-      if (missing.length) throw new Error('חסרים קובצי מדיה בגיבוי: ' + missing.slice(0, 3).join(', '));
-      const msg = `לשחזר ${c.questions.length} שאלות, ${c.cases.length} סיפורי מקרה ו־${media.size} תמונות (גיבוי מ־${c.createdAt.slice(0, 10)})?\nהמאגר המרכזי הנוכחי (${bankQs().length} שאלות) יוחלף. נתונים אישיים ומבחנים לא ייפגעו. לפני כן יורד גיבוי בטיחות.`;
+      const p = await parseBackup({ JSZip, data: await file.arrayBuffer() });
+      const c = p.central;
+      let msg = `לשחזר ${c.questions.length} שאלות, ${c.cases.length} סיפורי מקרה ו־${p.media.size} תמונות (גיבוי מ־${c.createdAt.slice(0, 10)})?\nהמאגר המרכזי הנוכחי (${bankQs().length} שאלות) יוחלף. נתונים אישיים ומבחנים לא ייפגעו. לפני כן יורד גיבוי בטיחות.`;
+      if (p.missingMedia.length) {
+        msg += `\n\nשים לב: בקובץ חסרות ${p.missingMedia.length} תמונות שהשאלות מפנות אליהן${p.legacy ? ' (גיבוי בפורמט ישן ללא תמונות)' : ''}. תמונות כאלה יישארו רק אם הן עדיין קיימות במאגר הנוכחי; אחרת השאלות יוצגו בלי התמונה.`;
+      }
       if (!confirm(msg)) { A.restoreMsg = 'השחזור בוטל.'; return render(); }
-      const safety = await makeBackup(); download(safety.blob, `גיבוי-בטיחות-לפני-שחזור-${Date.now()}.zip`);
-      await store.replaceCentral({ packages: c.packages, questions: c.questions, cases: c.cases, media, taxonomy: c.taxonomy });
-      await ctx.loadAll(); A.restoreMsg = `שוחזרו ${c.questions.length} שאלות.`; render();
+      A.restoreMsg = 'יוצר גיבוי בטיחות לפני השחזור...'; render();
+      const safety = await makeBackup();          // נכשל (ועוצר את השחזור) אם אי אפשר לגבות את המצב הנוכחי במלואו
+      download(safety.blob, `גיבוי-בטיחות-לפני-שחזור-${Date.now()}.zip`);
+      await store.replaceCentral({ packages: c.packages, questions: c.questions, cases: c.cases, media: p.media, taxonomy: c.taxonomy, keepMediaKeys: p.missingMedia });
+      await ctx.loadAll(); A.restoreMsg = `שוחזרו ${c.questions.length} שאלות, ${p.media.size} תמונות.` + (p.missingMedia.length ? ` ${p.missingMedia.length} תמונות לא היו בקובץ (נשמרו רק אם קיימות במאגר).` : ''); render();
     } catch (e) { A.restoreMsg = 'השחזור נכשל: ' + e.message; render(); }
   }
 
@@ -268,7 +268,7 @@ export function createAdmin(ctx) {
       const [map, k] = arg.split(':'); if (!confirm('למחוק את הערך מהמילון?')) return true;
       const tx = await store.loadTaxonomy(); if (tx[map]) delete tx[map][k]; await store.saveTaxonomy(tx); delete S.tax[map][k]; render(); return true;
     }
-    if (act === 'backup') { const { blob, central } = await makeBackup(); download(blob, `גיבוי-מאגר-מרכזי-${central.createdAt.slice(0, 10)}.zip`); toast(`הגיבוי הורד (${central.questions.length} שאלות)`); return true; }
+    if (act === 'backup') { try { toast('מכין גיבוי שלם (כולל תמונות)...'); const { blob, central } = await makeBackup(); download(blob, `גיבוי-מאגר-מרכזי-${central.createdAt.slice(0, 10)}.zip`); toast(`הגיבוי הורד: ${central.counts.questions} שאלות, ${central.counts.media} תמונות`); } catch (e) { A.restoreMsg = 'הגיבוי נכשל: ' + e.message; render(); } return true; }
     return false;
   }
   async function change(t, d) {

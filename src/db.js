@@ -107,14 +107,14 @@ export async function getOne(store, key) {
 }
 
 // החלפת כל המאגר המרכזי (שחזור מגיבוי). נתונים אישיים ומבחנים לא נוגעים.
-export async function replaceCentral({ packages, questions, cases, media, taxonomy }) {
+export async function replaceCentral({ packages, questions, cases, media, taxonomy, keepMediaKeys = [] }) {
   const db = await open();
   const tx = db.transaction(['packages', 'questions', 'cases', 'media', 'meta'], 'readwrite');
   for (const n of ['packages', 'questions', 'cases']) tx.objectStore(n).clear();
   const ms = tx.objectStore('media');
   // קודם מוחקים מדיה מרכזית ישנה, ורק אחר כך כותבים את החדשה (אחרת המחיקה תמחק גם אותה)
   const keys = ms.getAllKeys();
-  keys.onsuccess = () => { keys.result.filter(k => !String(k).startsWith('user/')).forEach(k => ms.delete(k)); for (const [key, data] of media) ms.put({ key, data }); };
+  keys.onsuccess = () => { const keep = new Set(keepMediaKeys); keys.result.filter(k => !String(k).startsWith('user/') && !(keep.has(k) && !media.has(k))).forEach(k => ms.delete(k)); for (const [key, data] of media) ms.put({ key, data }); };
   packages.forEach(p => tx.objectStore('packages').put(p));
   questions.forEach(q => tx.objectStore('questions').put(q));
   cases.forEach(c => tx.objectStore('cases').put(c));

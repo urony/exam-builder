@@ -180,3 +180,8 @@ node C:/dev/tools/ciwait.cjs <sha>
 - **פריסה ידנית בלבד:** אומת (06.11.2026) שב-`pages.yml` הטריגר היחיד הוא `workflow_dispatch`; `ci.yml` לא מפרסם; אין Workflow נוסף. אפשר להמשיך לפתח ולדחוף ל-`main` בלי שהאתר ישתנה.
 - **אזהרות GitHub Actions (Node 20):** הפריסה הראשונה הציגה אזהרות על פעולות רשמיות שרצות על Node.js 20. הפעולות עודכנו לגרסאות רשמיות ב-Node 24: `checkout@v7`, `setup-node@v7`, `setup-java@v6`, `upload-pages-artifact@v5`, `deploy-pages@v5` (`ci.yml` ו-`pages.yml`). ה-CI מאמת את `ci.yml` ב-push. **`pages.yml` המעודכן לא הורץ** (הרצה = פריסה); יאומת בפריסה הבאה, ואם ייכשל אפשר לחזור לגרסאות הקודמות (`checkout@v4`, `setup-node@v4`, `upload-pages-artifact@v3`, `deploy-pages@v4`).
 - **תחזוקה שנותרה:** צמצום מפתח ה-API של Firebase לפי HTTP referrer (מומלץ, לא אומת); מסך OAuth consent ב-"In production" ו-Drive API פעיל (לא אומתו על ידי הסוכן); פונקציות פיתוח מתות (`/__samples/`) נשארות בחבילה ללא כפתור שמפעיל אותן; אזהרת גודל חבילה (>500KB) ב-build.
+
+## 20. מדיניות פרטיות (06.11.2026)
+- נוסף עמוד `public/privacy.html` (יעד: https://exams.uronytools.com/privacy.html), נבנה ממקור `docs/privacy/privacy.src.html` בעזרת `node scripts/build-privacy.mjs` (משבץ Open Sans מתוך המדריך; יש להריץ מחדש אחרי עריכת המקור). קישור "מדיניות פרטיות" בשורת הקרדיט באפליקציה ובכותרת התחתונה של המדריך. קומיט `7ab7140`.
+- **עד כתיבת שורה זו העמוד נדחף ל-main אך לא נפרס**; פריסה דורשת אישור נפרד (Run workflow). אחרי הפריסה: להזין את הכתובת ב-Google Auth Platform ← Branding.
+- שאלות פתוחות שנותרו במדיניות: ניקוי IndexedDB בהתנתקות לא אומת; שארית suggestionMedia אחרי אישור לא אומתה; מחיקה לפי בקשה מטופלת ידנית דרך urony@hotmail.com. לא ייעוץ משפטי.

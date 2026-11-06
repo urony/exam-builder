@@ -109,7 +109,7 @@ async function signInFlow() {
     setBackend(createCloudStore({
       drive: createDrive({ getToken: cloud.getDriveToken }), firestore: cloud.firestore, uid: u.uid, isAdmin: admin, local: localStore,
       outbox: createIdbStore(idb, `ob:${u.uid}:`), mediaCache: createIdbStore(idb, 'mc:'), driveEnabled: u.hasDrive,
-      onSyncError: e => e.where === 'drive-corrupt' ? (logErr('Drive', 'קובץ פגום: ' + e.file), S.sync = { msg: 'קובץ אחד ב־Google Drive (' + e.file + ') פגום ולא נטען. שאר הנתונים נטענו והקובץ לא נמחק.' }) : (e.where === 'suggestions' || e.where === 'audit') ? reportCentral(e.where, e.error) : reportSync(e.where, e.error)),
+      onSyncError: e => e.where === 'drive-corrupt' ? (logErr('Drive', 'קובץ פגום: ' + e.file), S.sync = { msg: 'קובץ אחד ב־Google Drive (' + e.file + ') פגום ולא נטען. שאר הנתונים נטענו והקובץ לא נמחק.' }) : (e.where === 'suggestions' || e.where === 'audit') ? reportCentral(e.where, e.error) : reportSync(e.where, e.error),
     }));
     S.user = { uid: u.uid, name: u.name, hasDrive: u.hasDrive }; S.isAdmin = admin; S.sync = null; S.exam = null; S.mediaMissing.clear();
     try { await loadAll(); toast('מחובר: ' + (u.name || 'משתמש') + (admin ? ' (מנהל)' : '')); }

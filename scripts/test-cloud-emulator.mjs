@@ -65,6 +65,15 @@ t(q1b.reviewFlag === true && q1b.conflictNote && q1b.blocks[0].text === 'שאל�
   const raw = (await rawTeacherEarly(['bank', 'bankPrivate'])).join('|');
   t(!raw.includes('reviewFlag') && !raw.includes('conflictNote') && !raw.includes('הגיעה גרסה שונה'), 'קריאה ישירה: אין שדות ניהול בעותק הציבורי');
   t(raw.includes('DENIED:bankPrivate'), 'bankPrivate חסום למורה'); }
+{ // פרטי מחבר/מגיש הם שדות ניהול: מנהל רואה, מורה לא (גם בקריאה ישירה)
+  await ADMIN.saveBankQuestion({ ...q1b, authorAdmin: 'AUTHOR_MARK_X', author: 'PKGAUTHOR_MARK', submitterUid: 'uid-mark-9', submitterName: 'SUBMITTER_MARK' });
+  const qa = (await ADMIN.loadBank()).questions.find(q => q.uid === 'synthetic-pkg:q1');
+  t(qa.authorAdmin === 'AUTHOR_MARK_X' && qa.author === 'PKGAUTHOR_MARK' && qa.submitterUid === 'uid-mark-9' && qa.submitterName === 'SUBMITTER_MARK' && qa.reviewFlag === true, 'מנהל רואה מחבר ומגיש (ושדה הסימון נשמר)');
+  const qt = (await A.loadBank()).questions.find(q => q.uid === 'synthetic-pkg:q1');
+  t(qt.authorAdmin === undefined && qt.author === undefined && qt.submitterUid === undefined && qt.submitterName === undefined, 'מורה לא מקבל מחבר/מגיש');
+  const raw2 = (await rawTeacherEarly(['bank', 'bankPrivate', 'suggestions'])).join('|');
+  t(!/_MARK/.test(raw2) && !raw2.includes('uid-mark-9'), 'קריאה ישירה של מורה: אין פרטי מחבר/מגיש');
+}
 
 // 2. מורה לא יכול לכתוב למאגר (גם כשהוא מזייף דגל מנהל בלקוח)
 await rejectsCode(A.saveBankQuestion({ ...q1, title: 'האקר' }), 'not-admin');

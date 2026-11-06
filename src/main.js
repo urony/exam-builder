@@ -207,7 +207,8 @@ const badgesOf = q => [
 
 // ---------- מסכים ----------
 function render() {
-  if (S.tab === 'admin' && S.user && !S.isAdmin) S.tab = 'work';
+  const showAdmin = S.isAdmin || (import.meta.env.DEV && !S.user);   // בגרסת הייצור אין ממשק ניהול מקומי למורים
+  if (S.tab === 'admin' && !showAdmin) S.tab = 'work';
   const e = S.exam;
   const modes = [['search', 'חיפוש'], ['split', 'משולב'], ['exam', 'מבחן']];
   $app.innerHTML = `
@@ -216,7 +217,7 @@ function render() {
     <nav class="tabs">
       <button data-tab="work" class="${S.tab === 'work' ? 'on' : ''}">בניית מבחן</button>
       <button data-tab="personal" class="${S.tab === 'personal' ? 'on' : ''}">המאגר האישי</button>
-      ${!S.user || S.isAdmin ? `<button data-tab="admin" class="${S.tab === 'admin' ? 'on' : ''}">${S.user ? 'ניהול' : 'ניהול (מקומי)'}</button>` : ''}
+      ${showAdmin ? `<button data-tab="admin" class="${S.tab === 'admin' ? 'on' : ''}">${S.user ? 'ניהול' : 'ניהול (מקומי)'}</button>` : ''}
     </nav>
     ${S.tab === 'work' ? `<div class="seg" role="group" aria-label="מצב תצוגה">${modes.map(([k, t]) => `<button data-mode="${k}" class="${S.mode === k ? 'on' : ''}">${t}</button>`).join('')}</div>` : ''}
     <span class="spacer"></span>
@@ -224,6 +225,7 @@ function render() {
     <span class="pill" id="pill">${questionsOf(e).length} שאלות במבחן · ${totalPoints(e)} נק׳</span>
   </header>
   ${syncBarHtml()}
+  ${!S.user && cloudConfigured() ? '<div class="warnbar">מצב מקומי: המאגר והמבחנים נשמרים בדפדפן הזה בלבד. התחברו עם Google כדי לראות את המאגר המרכזי ולשמור ב-Drive.</div>' : ''}
   <main class="${S.tab === 'work' ? 'm-' + S.mode : ''}">${S.tab === 'work' ? workView() : S.tab === 'personal' ? personalView() : adminView()}</main>
   <footer class="credit">פותח על ידי אורי העליון</footer>
   ${S.modal && qByUid(S.modal) ? `<div class="modal" data-closemodal><div class="modalbox card"><button class="btn sm" data-closemodal style="float:inline-end">סגור ✕</button>${detailHtml(qByUid(S.modal))}</div></div>` : ''}`;

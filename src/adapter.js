@@ -156,6 +156,7 @@ export async function parsePackage(data, fileName = 'package.zip') {
       examCode: src.exam_code || null,
       year: src.year ?? null,
       session: src.session || null,
+      ...(typeof src.author === 'string' && src.author.trim() ? { author: src.author.trim() } : {}),
       originalNumber: q.original_number ?? null,
       pages: q.source_pages || [],
       section: q.source_section || null,

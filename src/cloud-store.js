@@ -69,7 +69,7 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
   const privChunk = id => id[1] === 'h';
   const colOf = id => (privChunk(id) ? 'bankPrivate' : 'bank');
   // שדות ניהול פנימיים: לא נכתבים לעותק הציבורי של שאלה. נשמרים ב-bankPrivate/adm (מנהל בלבד) וממוזגים בקריאה של מנהל.
-  const ADM_FIELDS = ['reviewFlag', 'conflictNote', 'adminEdited', 'fromSuggestion', 'approvedAt'];
+  const ADM_FIELDS = ['reviewFlag', 'conflictNote', 'adminEdited', 'fromSuggestion', 'approvedAt', 'author', 'authorAdmin', 'submitterUid', 'submitterName'];
   const pubView = it => { const o = { ...it }; for (const f of ADM_FIELDS) delete o[f]; return o; };
   const dirty = new Set();                                  // חבילות ששונו ממתינות לכתיבה
   const mkSt = (meta, q, c, privMedia = []) => {

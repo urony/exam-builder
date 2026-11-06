@@ -129,6 +129,51 @@ function mediaKey(k) { return 'img-' + k.replace(/[^\w.-]/g, '_'); }
   assert.deepEqual(await s.loadSuggestions(), []);
 }
 
+{ // קובץ Drive פגום / לא תקין: מדולג ומדווח, שאר המבחנים נטענים, הקובץ לא נמחק ולא נדרס בשקט
+  const { s, d, errs } = mkStore();
+  await s.saveExam(exam('good1', 'תקין א', 5)); await s.saveExam(exam('good2', 'תקין ב', 6));
+  d.files.set('exam-bad-json.json', '{זה לא json');
+  d.files.set('exam-bad-shape.json', JSON.stringify({ id: 123, nothing: true }));
+  d.files.set('exam-null.json', 'null');
+  const got = await s.loadExams();
+  assert.deepEqual(got.map(e => e.id).sort(), ['good1', 'good2'], 'מבחנים תקינים נטענו למרות קבצים פגומים');
+  assert.equal(errs.filter(e => e.where === 'drive-corrupt').length, 2, 'שני הקבצים הפגומים דווחו (ולא null)');
+  assert.ok(d.files.has('exam-bad-json.json') && d.files.has('exam-bad-shape.json'), 'הקבצים הפגומים לא נמחקו');
+  await s.savePersonalQuestion({ uid: 'pq1', kind: 'personal', blocks: [], domainId: 'x', typeId: 'y' });
+  d.files.set('pq-bad.json', '<<<');
+  assert.deepEqual((await s.loadPersonal()).map(q => q.uid), ['pq1'], 'שאלה אישית פגומה לא מפילה את הטעינה');
+}
+{ // שגיאת רשת/הרשאה בזמן קריאה לא נבלעת כקובץ פגום (עדיין נזרקת / נופלת לתור)
+  const { s, d } = mkStore();
+  await s.saveExam(exam('e9', 'ט', 9));
+  d.fail = { status: 401 };
+  const r = await s.loadExams().catch(e => e);
+  assert.ok(r instanceof Error || (Array.isArray(r) && r.some(e => e.id === 'e9')), '401 בקריאה: לא מוצג כמאגר ריק בשקט');
+  d.fail = null;
+}
+{ // הפרדה בין חשבונות: מנגנון Drive הוא appData פרטי לכל משתמש; הקוד לא מערבב מצב בין שני חשבונות
+  const A = mkStore({ uid: 'userA' }), B = mkStore({ uid: 'userB' });
+  await A.s.saveExam(exam('onlyA', 'של א', 1));
+  assert.deepEqual((await B.s.loadExams()).map(e => e.id), [], 'חשבון ב׳ לא רואה מבחנים של א׳ (Drive נפרד ותור נפרד)');
+  assert.equal((await B.ob.keys()).length, 0);
+}
+{ // שמירה שנכשלה: לא מוצגת כהצלחה (sync-pending), נשמרת בתור ולא אובדת; ניסיון חוזר מצליח
+  const { s, d, ob } = mkStore();
+  d.fail = { status: 503 };
+  const e = await s.saveExam(exam('p1', 'ממתין', 7)).then(() => null, x => x);
+  assert.equal(e?.code, 'sync-pending', 'כשל שמירה מדווח sync-pending ולא הצלחה');
+  assert.equal((await ob.keys()).length, 1, 'העבודה נשמרה בתור');
+  assert.equal((await s.loadExams()).find(x => x.id === 'p1')?.title, 'ממתין', 'המבחן עדיין נראה למשתמש מהתור');
+  d.fail = null; const r = await s.flush();
+  assert.equal(r.pending, 0, 'אחרי חזרת הרשת הסנכרון הושלם'); assert.ok(d.files.has('exam-p1.json'));
+}
+{ // עדכון ממחשב אחר חדש יותר לא נדרס על ידי שמירה ישנה מהתור
+  const { s, d, ob } = mkStore();
+  await s.saveExam(exam('c1', 'חדש', 100));
+  await ob.put('exam:c1', exam('c1', 'ישן', 50));
+  await s.flush();
+  assert.equal(JSON.parse(d.files.get('exam-c1.json')).title, 'חדש', 'גרסה ישנה מהתור לא דורסת גרסה חדשה בענן');
+}
 // ---- כללי Firestore: בדיקה סטטית (בנוסף לאמולטור) ----
 const rules = fs.readFileSync('firestore.rules', 'utf8');
 assert.ok(!/allow[^;]*:\s*if\s+true/.test(rules), 'אסור allow ... if true');

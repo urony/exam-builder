@@ -23,8 +23,9 @@ function textRuns(text, o = {}) {
 const P = (children, o = {}) => new Paragraph({ bidirectional: true, children, ...o });
 
 // ברירת מחדל גדולה כדי שמספרים וסימונים בתרשימים מורכבים יישארו קריאים (640px ~ 17 ס"מ). widthCm גובר.
-function imageParagraph(u8, { maxW = 640, maxH = 640, widthCm = null, alt = 'איור', after = 120, off = null, availCm = 17 } = {}) {
+function imageParagraphRaw(u8, { maxW = 640, maxH = 640, widthCm = null, alt = 'איור', after = 120, off = null, availCm = 17 } = {}) {
   const { w, h } = imageSize(u8);
+  if (!(w > 0 && h > 0)) throw new Error('bad image size');
   const s = widthCm ? (widthCm * 96 / 2.54) / w : Math.min(1, maxW / w, maxH / h);
   const type = u8[0] === 0x89 ? 'png' : 'jpg';
   return new Paragraph({
@@ -33,6 +34,10 @@ function imageParagraph(u8, { maxW = 640, maxH = 640, widthCm = null, alt = 'א�
     children: [new ImageRun({ type, data: u8, transformation: { width: Math.round(w * s), height: Math.round(h * s) }, altText: { name: alt, title: alt, description: alt } })],
   });
 }
+
+// תמונה פגומה אינה מפילה את הפקת המבחן כולו: מוצג סימון גלוי במקומה
+const brokenImage = () => P([run('[תמונה פגומה]', { color: 'AA0000' })]);
+function imageParagraph(u8, o) { try { return imageParagraphRaw(u8, o); } catch { return brokenImage(); } }
 
 function tableFrom(rows, { shadeFill = 'F2F2F2', keep = true } = {}) {
   const cols = Math.max(...rows.map(r => r.length), 1);
@@ -150,7 +155,7 @@ function rubricBox(item, ctx) {
       kids.push(P([run(`המחוון הרשמי לשאלה זו סרוק – ראו נספח ${idx} בסוף המסמך.`, { italics: true })]));
     } else if (b.type === 'image') {
       const u8 = ctx.getMedia(b.mediaKey);
-      if (u8) kids.push(imageParagraph(u8, { maxW: 480, maxH: 360 }));
+      kids.push(u8 ? imageParagraph(u8, { maxW: 480, maxH: 360 }) : P([run('[תמונה חסרה במחוון]', { color: 'AA0000' })]));
     }
   }
   if (r.notes) kids.push(P([run('הנחיות בדיקה: ', { bold: true }), ...textRuns(r.notes)], { spacing: { before: 60 } }));
@@ -229,7 +234,7 @@ export function buildExamDocument(exam, { getMedia }, mode = 'student') {
     appendix.forEach((key, i) => {
       const u8 = getMedia(key);
       ch.push(P([run(`נספח ${i + 1}: עמוד מחוון רשמי (סריקה)`, { bold: true, size: 26 })], { pageBreakBefore: true, spacing: { after: 120 } }));
-      if (u8) ch.push(imageParagraph(u8, { maxW: 640, maxH: 900, alt: `מחוון נספח ${i + 1}` }));
+      ch.push(u8 ? imageParagraph(u8, { maxW: 640, maxH: 900, alt: `מחוון נספח ${i + 1}` }) : P([run('[עמוד המחוון הסרוק חסר – לא נטען. נסו להפיק שוב]', { color: 'AA0000' })]));
     });
   }
 

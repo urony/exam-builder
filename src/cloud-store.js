@@ -80,12 +80,12 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
   async function readCentral() {
     const { fs, db } = await firestore();
     const meta = { rev: 0, packages: [], taxonomy: { domains: {}, types: {} }, media: [] };
-    const q = new Map(), c = new Map(); let privMedia = [], adm = null, admRaw = null; const raw = new Map(); let metaRev = 0;
+    const q = new Map(), c = new Map(); let privMedia = []; const admBase = new Map(), adm = {}; const raw = new Map(); let metaRev = 0;
     const take = (snap, isPriv) => {
       for (const d of snap.docs) {
         const v = d.data();
         if (d.id === 'meta') { if (isPriv) privMedia = JSON.parse(v.json).media || []; else { Object.assign(meta, JSON.parse(v.json)); metaRev = meta.rev || 0; } }
-        else if (isPriv && d.id === 'adm') { admRaw = v.json; adm = JSON.parse(v.json); }
+        else if (isPriv && (d.id === 'adm' || d.id.startsWith('adm-'))) { admBase.set(d.id, v.json); }   // 'adm' = פורמט ישן (מסמך אחד), 'adm-<chunk>' = לפי חבילת שאלות
         else if (d.id.startsWith('q')) { q.set(d.id, JSON.parse(v.json)); raw.set(d.id, v.json); }
         else if (d.id.startsWith('c')) { c.set(d.id, JSON.parse(v.json)); raw.set(d.id, v.json); }
       }
@@ -93,8 +93,9 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
     take(await fs.getDocs(fs.collection(db, 'bank')), false);
     if (isAdmin) take(await fs.getDocs(fs.collection(db, 'bankPrivate')), true);   // מורה לא מנסה לקרוא (ייחסם בכללים)
     dirty.clear();
-    if (adm) for (const [id, items] of q) if (!privChunk(id)) for (const it of items) if (adm[it.uid]) Object.assign(it, adm[it.uid]);
-    st = mkSt(meta, q, c, privMedia); st.admJson = admRaw; st.admBase = admRaw; st.raw = raw; st.metaRev = metaRev;
+    for (const id of [...admBase.keys()].sort((a, b) => (a === 'adm' ? -1 : b === 'adm' ? 1 : a < b ? -1 : 1))) Object.assign(adm, JSON.parse(admBase.get(id)));   // הישן קודם; פורמט חדש גובר
+    for (const [id, items] of q) if (!privChunk(id)) for (const it of items) if (adm[it.uid]) Object.assign(it, adm[it.uid]);
+    st = mkSt(meta, q, c, privMedia); st.admBase = admBase; st.raw = raw; st.metaRev = metaRev;
     return st;
   }
   const ensure = async () => st || readCentral();
@@ -118,15 +119,19 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
     if (enc.encode(json).length > MAX_JSON) throw tmpl('too-large', 'חבילת שאלות גדולה מדי');
     return { type: 'set', col: colOf(id), id, data: { kind: prefix === 'q' ? 'questions' : 'cases', n: items.length, json }, bytes: json.length };
   };
-  // מסמך שדות הניהול של שאלות ציבוריות (נכתב רק כשהשתנה)
+  // שדות הניהול של שאלות ציבוריות: מסמך לכל חבילת שאלות (bankPrivate/adm-q-NNN), כדי שלא יגדלו מעבר למגבלת המסמך.
+  // פורמט ישן: מסמך יחיד 'adm'. נקרא כרגיל, ובכתיבה הראשונה מועבר לפורמט החדש והישן נמחק (באותה כתיבה).
   const admOp = () => {
-    const m = {};
-    for (const [id, items] of st.q) if (!privChunk(id)) for (const it of items) { const f = {}; for (const k of ADM_FIELDS) if (it[k] !== undefined) f[k] = it[k]; if (Object.keys(f).length) m[it.uid] = f; }
-    const json = JSON.stringify(m);
-    if (json === (st.admJson ?? '{}')) return [];
-    if (enc.encode(json).length > MAX_JSON) throw tmpl('too-large', 'מסמך שדות הניהול גדול מדי');
-    st.admJson = json;
-    return [{ type: 'set', col: 'bankPrivate', id: 'adm', data: { kind: 'adm', json }, bytes: json.length }];
+    const want = new Map();
+    for (const [id, items] of st.q) if (!privChunk(id)) {
+      const m = {};
+      for (const it of items) { const f = {}; for (const k of ADM_FIELDS) if (it[k] !== undefined) f[k] = it[k]; if (Object.keys(f).length) m[it.uid] = f; }
+      if (Object.keys(m).length) { const json = JSON.stringify(m); if (enc.encode(json).length > MAX_JSON) throw tmpl('too-large', 'שדות הניהול של חבילת שאלות גדולים מדי'); want.set('adm-' + id, json); }
+    }
+    const ops = [];
+    for (const [id, json] of want) if (st.admBase.get(id) !== json) ops.push({ type: 'set', col: 'bankPrivate', id, data: { kind: 'adm', json }, bytes: json.length });
+    for (const id of st.admBase.keys()) if (!want.has(id)) ops.push({ type: 'delete', col: 'bankPrivate', id });
+    return ops;
   };
   const peekOps = () => [...dirty].map(chunkOp);   // בדיקת עדכניות לפני כתיבת איורים (מונע איורים יתומים בקונפליקט)
   const dirtyOps = () => { const ops = [...dirty].map(chunkOp); dirty.clear(); return ops; };
@@ -180,16 +185,16 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
     for (const o of ops) {
       if (o.type === 'set' && o.col === 'bankMedia') continue;
       const isChunk = /^(q|c)h?-/.test(o.id) && (o.col === 'bank' || o.col === 'bankPrivate');
-      const isAdm = o.col === 'bankPrivate' && o.id === 'adm', isMeta = o.col === 'bank' && o.id === 'meta';
+      const isAdm = o.col === 'bankPrivate' && (o.id === 'adm' || o.id.startsWith('adm-')), isMeta = o.col === 'bank' && o.id === 'meta';
       if (!isChunk && !isAdm && !isMeta) continue;
       const s = await fs.getDoc(fs.doc(db, o.col, o.id)); const cur = s.exists() ? s.data() : null;
       if (isMeta) { if ((cur ? cur.rev || 0 : 0) !== (st.metaRev || 0)) stale.push('meta'); }
-      else if (isAdm) { if ((cur ? cur.json : null) !== (st.admBase ?? null)) stale.push('adm'); }
+      else if (isAdm) { if ((cur ? cur.json : null) !== (st.admBase.get(o.id) ?? null)) stale.push(o.id); }
       else if ((cur ? cur.json : null) !== (st.raw.get(o.id) ?? null)) stale.push(o.id);
     }
     if (stale.length) { st = null; throw tmpl('conflict', 'המאגר המרכזי שונה בינתיים במקום אחר (לשונית או מנהל אחר). לא נשמר דבר כדי לא לדרוס שינויים. טען מחדש ונסה שוב.'); }
   }
-  const noteWritten = ops => { for (const o of ops) { if (o.col === 'bankMedia') continue; if (o.id === 'adm') st.admBase = o.data.json; else if (o.id === 'meta' && o.col === 'bank') st.metaRev = o.data.rev; else if (/^(q|c)h?-/.test(o.id)) { if (o.type === 'set') st.raw.set(o.id, o.data.json); else st.raw.delete(o.id); } } };
+  const noteWritten = ops => { for (const o of ops) { if (o.col === 'bankMedia') continue; if (o.id === 'adm' || o.id.startsWith('adm-')) { if (o.type === 'set') st.admBase.set(o.id, o.data.json); else st.admBase.delete(o.id); } else if (o.id === 'meta' && o.col === 'bank') st.metaRev = o.data.rev; else if (/^(q|c)h?-/.test(o.id)) { if (o.type === 'set') st.raw.set(o.id, o.data.json); else st.raw.delete(o.id); } } };
   async function persist({ withMeta = false } = {}) {
     const r = reconcile(); const ops = [...dirtyOps(), ...r.ops, ...admOp()];
     await guard(ops); await commit(ops); noteWritten(ops); dropEmpty('q'); dropEmpty('c');
@@ -254,11 +259,22 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
     catch (e) { throw Object.assign(tmpl('sync-pending', 'השמירה בענן נכשלה. הנתונים נשמרו במחשב וימתינו לסנכרון.'), { cause: e }); }
   }
 
+  // קריאת קובצי Drive: קובץ פגום/לא תקין מדולג ומדווח (ואינו נמחק), ואינו מפיל את שאר המבחנים. שגיאות רשת/הרשאה ממשיכות להיזרק.
+  async function readFiles(prefix, valid) {
+    const files = await drive.list(prefix); const out = [];
+    await Promise.all(files.map(async f => {
+      try { const v = await drive.getJson(f.name); if (v == null) return; if (!valid(v)) throw new SyntaxError('מבנה קובץ לא תקין: ' + f.name); out.push(v); }
+      catch (e) { if (e instanceof SyntaxError) onSyncError({ where: 'drive-corrupt', error: e, file: f.name }); else throw e; }
+    }));
+    return out;
+  }
+  const validExam = v => v && typeof v === 'object' && typeof v.id === 'string' && Array.isArray(v.items);
+  const validPq = v => v && typeof v === 'object' && typeof v.uid === 'string';
   const personal = {
     async loadExams() {
       await flush().catch(() => {});
       let remote = [], listErr = null;
-      try { const files = await drive.list('exam-'); remote = (await Promise.all(files.map(f => drive.getJson(f.name)))).filter(Boolean); } catch (e) { listErr = e; }
+      try { remote = await readFiles('exam-', validExam); } catch (e) { listErr = e; }
       const map = new Map(remote.map(e => [e.id, e]));
       for (const k of await outbox.keys('exam:')) { const v = await outbox.get(k); const cur = map.get(v.id); if (!cur || (v.updatedAt || 0) >= (cur.updatedAt || 0)) map.set(v.id, v); }
       for (const k of await outbox.keys('del-exam:')) map.delete(k.slice(9));
@@ -271,7 +287,7 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
     async loadPersonal() {
       await flush().catch(() => {});
       let remote = [], listErr = null;
-      try { const files = await drive.list('pq-'); remote = (await Promise.all(files.map(f => drive.getJson(f.name)))).filter(Boolean); } catch (e) { listErr = e; }
+      try { remote = await readFiles('pq-', validPq); } catch (e) { listErr = e; }
       const map = new Map(remote.map(q => [q.uid, q]));
       for (const k of await outbox.keys('pq:')) { const v = await outbox.get(k); map.set(v.uid, v); }
       for (const k of await outbox.keys('del-pq:')) map.delete(k.slice(7));
@@ -393,7 +409,7 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
       const oldQ = [...old.q.keys()], oldC = [...old.c.keys()], oldMedia = [...old.media.keys()];
       dirty.clear();
       st = mkSt({ rev: old.meta.rev, packages: strip(packages), taxonomy: strip(taxonomy || { domains: {}, types: {} }), media: [] }, new Map(), new Map());
-      st.admJson = old.admJson; st.admBase = old.admBase; st.raw = new Map(); st.metaRev = old.metaRev; st.force = true;
+      st.admBase = old.admBase; st.raw = new Map(); st.metaRev = old.metaRev; st.force = true;
       for (const q of questions) place('q', strip(q), !isPubQ(q));
       for (const c of cases) place('c', strip(c), true);                       // reconcile מפרסם רק מקרים שנדרשים לשאלה מפורסמת
       const ops = [];

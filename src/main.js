@@ -109,7 +109,7 @@ async function signInFlow() {
     setBackend(createCloudStore({
       drive: createDrive({ getToken: cloud.getDriveToken }), firestore: cloud.firestore, uid: u.uid, isAdmin: admin, local: localStore,
       outbox: createIdbStore(idb, `ob:${u.uid}:`), mediaCache: createIdbStore(idb, 'mc:'), driveEnabled: u.hasDrive,
-      onSyncError: e => (e.where === 'suggestions' || e.where === 'audit') ? reportCentral(e.where, e.error) : reportSync(e.where, e.error),
+      onSyncError: e => e.where === 'drive-corrupt' ? (logErr('Drive', 'קובץ פגום: ' + e.file), S.sync = { msg: 'קובץ אחד ב־Google Drive (' + e.file + ') פגום ולא נטען. שאר הנתונים נטענו והקובץ לא נמחק.' }) : (e.where === 'suggestions' || e.where === 'audit') ? reportCentral(e.where, e.error) : reportSync(e.where, e.error)),
     }));
     S.user = { uid: u.uid, name: u.name, hasDrive: u.hasDrive }; S.isAdmin = admin; S.sync = null; S.exam = null; S.mediaMissing.clear();
     try { await loadAll(); toast('מחובר: ' + (u.name || 'משתמש') + (admin ? ' (מנהל)' : '')); }
@@ -130,24 +130,39 @@ const mediaUrl = key => {
   return S.urls.get(key);
 };
 
-let saveTimer;
+// שמירת מבחן: השהיה קצרה (350ms) לכל מבחן בנפרד. מעבר בין מבחנים, יצירת מבחן חדש, הסתרת הלשונית או סגירתה
+// מבצעים שמירה מיידית של כל מה שממתין (בעבר טיימר משותף אחד גרם לאובדן שקט של עריכה אחרונה).
+const saveTimers = new Map();
 function saveExamSoon() {
-  S.exam.updatedAt = Date.now();
-  clearTimeout(saveTimer);
+  const ex = S.exam; ex.updatedAt = Date.now();
+  const cur = saveTimers.get(ex.id); if (cur) clearTimeout(cur.timer);
   const ind = document.getElementById('saveind'); if (ind) ind.textContent = 'שומר…';
-  saveTimer = setTimeout(async () => {
-    const i2 = () => document.getElementById('saveind');
-    try {
-      await store.saveExam(S.exam);
-      if (S.sync?.msg?.startsWith('השמירה בענן')) S.sync = null;
-      S.exams = await store.loadExams();
-      if (i2()) i2().textContent = 'נשמר ✓';
-    } catch (e) {
-      if (e.code === 'sync-pending') { if (i2()) i2().textContent = 'נשמר במחשב בלבד – ממתין לענן'; reportSync('מבחן', e); }
-      else { if (i2()) i2().textContent = 'השמירה נכשלה'; toast('השמירה נכשלה: ' + (e.code || e.message)); console.error(e); }
-    }
-  }, 350);
+  saveTimers.set(ex.id, { exam: ex, timer: setTimeout(() => runSave(ex.id), 350) });
 }
+async function runSave(id) {
+  const p = saveTimers.get(id); if (!p) return;
+  clearTimeout(p.timer); saveTimers.delete(id); const ex = p.exam;
+  const i2 = () => (ex === S.exam ? document.getElementById('saveind') : null);
+  try {
+    await store.saveExam(ex);
+    if (i2()) i2().textContent = 'נשמר ✓';                       // רק אחרי שהכתיבה באמת הושלמה
+    if (S.sync?.msg?.startsWith('השמירה בענן')) S.sync = null;
+  } catch (e) {
+    if (e.code === 'sync-pending') { if (i2()) i2().textContent = 'נשמר במחשב בלבד – ממתין לענן'; reportSync('מבחן', e); }
+    else { if (i2()) i2().textContent = 'השמירה נכשלה'; toast('השמירה נכשלה: ' + (e.code || e.message)); console.error(e); }
+    return;
+  }
+  try { S.exams = await store.loadExams(); } catch (e) { reportSync('רענון רשימת מבחנים', e); }   // כשל ברענון הרשימה אינו כשל שמירה
+}
+const flushSaves = () => Promise.all([...saveTimers.keys()].map(runSave));
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushSaves(); });
+window.addEventListener('pagehide', () => { flushSaves(); });
+// כשל לא צפוי בפעולה אסינכרונית לעולם לא נבלע בשקט
+window.addEventListener('unhandledrejection', ev => {
+  const e = ev.reason; console.error('unhandled:', e);
+  if (e?.code === 'sync-pending') { reportSync('שמירה', e); ev.preventDefault(); return; }
+  toast('הפעולה נכשלה: ' + (e?.code || e?.message || e)); ev.preventDefault();
+});
 
 // ---------- חיפוש ----------
 function srcLabel(q) { if (q.kind === 'personal') return 'שאלה אישית'; return q.kind === 'bagrut' ? `בגרות ${q.year ?? ''}${q.examCode ? ' · ' + q.examCode : ''}` : 'שאלה ממורה'; }
@@ -576,7 +591,9 @@ $app.addEventListener('click', async e => {
   if (d.pqrm) { const [k, i] = d.pqrm.split(':'); S.pq[k].splice(+i, 1); return render(); }
   if (d.pqsave !== undefined) {
     const err = validateDraft(S.pq); if (err) { S.pq.error = err; return render(); }
-    const q = draftToQuestion(S.pq); await store.savePersonalQuestion(q); S.personal = await store.loadPersonal(); S.questions = S.questions.filter(x => x.kind !== 'personal').concat(S.personal);
+    const q = draftToQuestion(S.pq);
+    try { await store.savePersonalQuestion(q); } catch (e) { if (e.code === 'sync-pending') reportSync('שאלה אישית', e); else { S.pq.error = 'השמירה נכשלה: ' + (e.code || e.message); return render(); } }
+    S.personal = await store.loadPersonal(); S.questions = S.questions.filter(x => x.kind !== 'personal').concat(S.personal);
     S.pq = null; toast('השאלה נשמרה במאגר האישי'); return render();
   }
   if (d.pqdel) { if (!confirm('למחוק את השאלה האישית? מבחנים שכבר כוללים אותה לא ישתנו.')) return; await store.deletePersonalQuestion(d.pqdel); S.personal = await store.loadPersonal(); S.questions = S.questions.filter(x => x.kind !== 'personal').concat(S.personal); return render(); }
@@ -606,7 +623,7 @@ $app.addEventListener('change', async e => {
   if (d.pvt !== undefined) { S.pvTeacher = t.checked; return render(); }
   if (t.id === 'files') return importFiles([...t.files], { publish: S.adm.publishOnImport });
   if (t.id === 'sort') { S.sort = t.value; return render(); }
-  if (t.id === 'examsel') { S.exam = S.exams.find(x => x.id === t.value); S.editing.clear(); return render(); }
+  if (t.id === 'examsel') { await flushSaves(); S.exam = S.exams.find(x => x.id === t.value) || S.exam; S.editing.clear(); return render(); }
   if (d.f) { t.checked ? S.f[d.f].add(t.value) : S.f[d.f].delete(t.value); return render(); }
   if (d.chk) { t.checked ? S.checked.add(d.chk) : S.checked.delete(d.chk); return render(); }
   if (d.m) {
@@ -695,12 +712,14 @@ function openLightbox(src) {
 async function exportDoc(mode) {
   const e = S.exam;
   try {
-    await ensureMedia(examMediaKeys(e));
+    const need = [...new Set(examMediaKeys(e))]; need.forEach(k => S.mediaMissing.delete(k));   // ניסיון חוזר לתמונות שנכשלו קודם
+    await ensureMedia(need);
+    const absent = need.filter(k => !S.media.has(k));
     const blob = await toBlob(buildExamDocument(e, { getMedia: k => S.media.get(k) }, mode));
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
     a.download = `${(e.title || 'מבחן').replace(/[\\/:*?"<>|]/g, '')} - ${mode === 'teacher' ? 'מורה' : 'תלמיד'}.docx`;
     a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-    toast('קובץ Word הופק');
+    toast(absent.length ? `קובץ Word הופק, אבל ${absent.length} תמונות לא נטענו ומסומנות במסמך כ״חסרות״. בדקו חיבור ונסו שוב.` : 'קובץ Word הופק');
   } catch (err) { console.error(err); toast('ההפקה נכשלה: ' + err.message); }
 }
 

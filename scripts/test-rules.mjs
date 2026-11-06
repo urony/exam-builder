@@ -62,6 +62,19 @@ await no('A flips hidden media to pub', A.doc('bankMedia/m-hidden').update({ pub
 await no('A forges FAKECLAIM bankPrivate', FAKECLAIM.doc('bankPrivate/qh-000').get());
 await no('anon reads bankPrivate', ANON.doc('bankPrivate/qh-000').get());
 await no('anon reads public media', ANON.doc('bankMedia/m1').get());
+// שדות ניהול מפוצלים (bankPrivate/adm-q-NNN) ופורמט ישן (bankPrivate/adm): מנהל בלבד
+for (const id of ['adm-q-000', 'adm']) {
+  await no('A reads ' + id, A.doc('bankPrivate/' + id).get());
+  await no('A writes ' + id, A.doc('bankPrivate/' + id).set({ kind: 'adm', json: '{}' }));
+  await no('A deletes ' + id, A.doc('bankPrivate/' + id).delete());
+  await no('FAKECLAIM writes ' + id, FAKECLAIM.doc('bankPrivate/' + id).set({ kind: 'adm', json: '{}' }));
+  await no('anon reads ' + id, ANON.doc('bankPrivate/' + id).get());
+  await no('PWD-provider reads ' + id, PWD.doc('bankPrivate/' + id).get());
+  await ok('admin writes ' + id, ADM.doc('bankPrivate/' + id).set({ kind: 'adm', json: '{}' }));
+  await ok('admin reads ' + id, ADM.doc('bankPrivate/' + id).get());
+}
+await no('A lists bankPrivate', A.collection('bankPrivate').get());
+await no('A lists bank sourceHistory query', A.collection('bankPrivate').where('kind', '==', 'adm').get());
 await no('A writes bank', A.doc('bank/q-000').set({ kind: 'questions', items: [{ uid: 'evil' }] }));
 await no('A creates bank doc', A.doc('bank/new').set({ x: 1 }));
 await no('A deletes bank', A.doc('bank/q-000').delete());

@@ -176,5 +176,36 @@ t((await mk('ADMIN', true).loadBank()).questions.length === 74, 'ניסיון ה
   t(e3 && e3.code === 'conflict' && (await mk('ADMIN', true).loadTaxonomy()).domains.cardiology === 'א', 'meta מיושן נחסם ולא דורס');
 }
 
+// ---------- שדות ניהול: פורמט ישן (מסמך יחיד) -> חדש (לכל חבילה), וגדילה לאלפי שאלות ----------
+{
+  await resetCloud();
+  const a0 = mk('ADMIN', true); await a0.importPackage(syntheticPackage(8, { pkgId: 'mg' }), { publish: true });
+  // מדמים מצב ישן בענן: שדות הניהול במסמך יחיד bankPrivate/adm
+  await env.withSecurityRulesDisabled(c => c.firestore().doc('bankPrivate/adm').set({ kind: 'adm', json: JSON.stringify({ 'mg:q2': { authorAdmin: 'מהישן', reviewFlag: true } }) }));
+  const legacy = await mk('ADMIN', true).loadBank();
+  t(legacy.questions.find(q => q.uid === 'mg:q2').authorAdmin === 'מהישן', 'פורמט ישן (adm) עדיין נקרא');
+  const am = mk('ADMIN', true); const lm = await am.loadBank();
+  await am.saveBankQuestion({ ...lm.questions.find(q => q.uid === 'mg:q3'), authorAdmin: 'חדש' });
+  const ids = async () => { const { fs: f, db } = fsFor('ADMIN'); return (await f.getDocs(f.collection(db, 'bankPrivate'))).docs.map(d => d.id).sort(); };
+  const after = await mk('ADMIN', true).loadBank();
+  t(!(await ids()).includes('adm') && (await ids()).some(i => i.startsWith('adm-q-')), 'כתיבה ראשונה העבירה לפורמט חדש ומחקה את הישן: ' + (await ids()).join(','));
+  t(after.questions.find(q => q.uid === 'mg:q2').authorAdmin === 'מהישן' && after.questions.find(q => q.uid === 'mg:q3').authorAdmin === 'חדש' && after.questions.find(q => q.uid === 'mg:q2').reviewFlag === true, 'שדות הניהול שרדו את ההעברה');
+  t(!JSON.stringify((await mk('teacherX').loadBank()).questions).includes('מהישן'), 'מורה לא רואה שדות ניהול (פורמט חדש)');
+  // גדילה: 4000 שאלות עם היסטוריה ומחבר. במסמך יחיד זה חורג ממגבלת ~900KB.
+  await resetCloud();
+  const big = syntheticPackage(4000, { pkgId: 'scale' });
+  for (const q of big.questions) { q.authorAdmin = 'מחבר ' + q.uid; q.sourceHistory = [1, 2, 3].map(i => ({ at: '2026-11-06T00:00:00.000Z', field: 'year', from: 2000 + i, to: 2001 + i })); }
+  const t0 = Date.now(); await mk('ADMIN', true).importPackage(big, { publish: true });
+  const { fs: f, db } = fsFor('ADMIN'); const priv = (await f.getDocs(f.collection(db, 'bankPrivate'))).docs.filter(d => d.id.startsWith('adm-'));
+  const total = priv.reduce((a, d) => a + d.data().json.length, 0), maxDoc = Math.max(...priv.map(d => d.data().json.length));
+  t(total > 900_000 && maxDoc < 900_000 && priv.length > 1, 'שדות ניהול של 4000 שאלות: ' + total + ' בתים בסך הכול (מעל מגבלת מסמך יחיד), מקסימום מסמך ' + maxDoc + ', ' + priv.length + ' מסמכים');
+  const back = await mk('ADMIN', true).loadBank();
+  t(back.questions.length === 4000 && back.questions.every(q => q.authorAdmin === 'מחבר ' + q.uid && q.sourceHistory.length === 3), 'כל 4000 השאלות חוזרות למנהל עם מחבר והיסטוריה (' + (Date.now() - t0) + 'ms כולל ייבוא)');
+  const tq = (await mk('teacherX').loadBank()).questions;
+  t(tq.length === 4000 && !JSON.stringify(tq).includes('sourceHistory') && !JSON.stringify(tq).includes('מחבר '), 'מורה רואה 4000 שאלות ללא שדות ניהול');
+  const one = mk('ADMIN', true); const l1 = await one.loadBank(); await one.saveBankQuestion({ ...l1.questions[1234], authorAdmin: 'עודכן' });
+  t((await mk('ADMIN', true).loadBank()).questions.find(q => q.uid === l1.questions[1234].uid).authorAdmin === 'עודכן', 'עריכת שאלה אחת במאגר גדול עובדת');
+}
+
 console.log(`test-backup-emulator: OK (${n} בדיקות שחזור מלא מול אמולטור)`);
 process.exit(0);

@@ -48,7 +48,7 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
     for (const o of ops) {
       const ref = fs.doc(db, o.col, o.id);
       if (n >= BATCH_OPS || bytes + (o.bytes || 1000) > BATCH_BYTES) await flush();
-      if (o.type === 'set') batch.set(ref, o.data); else batch.delete(ref);
+      if (o.type === 'set') batch.set(ref, o.data); else if (o.type === 'update') batch.update(ref, o.data); else batch.delete(ref);
       n++; bytes += o.bytes || 1000;
     }
     await flush();
@@ -61,57 +61,106 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
   }
 
   // ---------------- המאגר המרכזי: קריאה ----------------
+  // הפרדת הרשאות (אבטחה אמיתית, לא סינון בממשק):
+  //   תוכן מפורסם  -> bank/{q-NNN,c-NNN,meta} ו-bankMedia עם pub=true  (קריאה לכל מורה מחובר)
+  //   תוכן מוסתר   -> bankPrivate/{qh-NNN,ch-NNN,meta} ו-bankMedia עם pub=false  (מנהל בלבד, נאכף בכללים)
+  // שאלה מוסתרת היא כל שאלה עם published===false. סיפור מקרה/איור ציבוריים רק אם שאלה מפורסמת משתמשת בהם (reconcile).
+  const isPubQ = q => q.published !== false;
+  const privChunk = id => id[1] === 'h';
+  const colOf = id => (privChunk(id) ? 'bankPrivate' : 'bank');
+  const dirty = new Set();                                  // חבילות ששונו ממתינות לכתיבה
+  const mkSt = (meta, q, c, privMedia = []) => {
+    const idx = m => { const r = new Map(); for (const [id, items] of m) for (const it of items) r.set(it.uid, id); return r; };
+    const media = new Map(); for (const m of meta.media) media.set(m.key, { ...m, pub: true }); for (const m of privMedia) media.set(m.key, { ...m, pub: false });
+    return { meta, q, c, qIdx: idx(q), cIdx: idx(c), media };
+  };
   async function readCentral() {
     const { fs, db } = await firestore();
-    const snap = await fs.getDocs(fs.collection(db, 'bank'));
     const meta = { rev: 0, packages: [], taxonomy: { domains: {}, types: {} }, media: [] };
-    const q = new Map(), c = new Map();
-    for (const d of snap.docs) {
-      const v = d.data();
-      if (d.id === 'meta') Object.assign(meta, JSON.parse(v.json));
-      else if (d.id.startsWith('q-')) q.set(d.id, JSON.parse(v.json));
-      else if (d.id.startsWith('c-')) c.set(d.id, JSON.parse(v.json));
-    }
-    const idx = m => { const r = new Map(); for (const [id, items] of m) for (const it of items) r.set(it.uid, id); return r; };
-    st = { meta, q, c, qIdx: idx(q), cIdx: idx(c), media: new Map(meta.media.map(m => [m.key, m])) };
+    const q = new Map(), c = new Map(); let privMedia = [];
+    const take = (snap, isPriv) => {
+      for (const d of snap.docs) {
+        const v = d.data();
+        if (d.id === 'meta') { if (isPriv) privMedia = JSON.parse(v.json).media || []; else Object.assign(meta, JSON.parse(v.json)); }
+        else if (d.id.startsWith('q')) q.set(d.id, JSON.parse(v.json));
+        else if (d.id.startsWith('c')) c.set(d.id, JSON.parse(v.json));
+      }
+    };
+    take(await fs.getDocs(fs.collection(db, 'bank')), false);
+    if (isAdmin) take(await fs.getDocs(fs.collection(db, 'bankPrivate')), true);   // מורה לא מנסה לקרוא (ייחסם בכללים)
+    dirty.clear();
+    st = mkSt(meta, q, c, privMedia);
     return st;
   }
   const ensure = async () => st || readCentral();
 
-  const metaOp = () => {
-    st.meta.rev = (st.meta.rev || 0) + 1; st.meta.media = [...st.media.values()];
-    const json = JSON.stringify(st.meta);
-    if (enc.encode(json).length > MAX_JSON) throw tmpl('too-large', 'מסמך ה-meta של המאגר גדול מדי');
-    return { type: 'set', col: 'bank', id: 'meta', data: { kind: 'meta', rev: st.meta.rev, json }, bytes: json.length };
+  // meta ציבורי: רשימת איורים ציבוריים בלבד. meta פרטי: איורים מוסתרים.
+  const metaOps = () => {
+    st.meta.rev = (st.meta.rev || 0) + 1;
+    const all = [...st.media.values()].map(({ pub, ...m }) => ({ m, pub }));
+    st.meta.media = all.filter(x => x.pub).map(x => x.m);
+    const json = JSON.stringify(st.meta), pj = JSON.stringify({ media: all.filter(x => !x.pub).map(x => x.m) });
+    if (enc.encode(json).length > MAX_JSON || enc.encode(pj).length > MAX_JSON) throw tmpl('too-large', 'מסמך ה-meta של המאגר גדול מדי');
+    return [
+      { type: 'set', col: 'bank', id: 'meta', data: { kind: 'meta', rev: st.meta.rev, json }, bytes: json.length },
+      { type: 'set', col: 'bankPrivate', id: 'meta', data: { kind: 'meta', json: pj }, bytes: pj.length },
+    ];
   };
-  const chunkOp = (prefix, id) => {
-    const items = (prefix === 'q' ? st.q : st.c).get(id);
-    if (!items || !items.length) return { type: 'delete', col: 'bank', id };
+  const chunkOp = id => {
+    const prefix = id[0], items = (prefix === 'q' ? st.q : st.c).get(id);
+    if (!items || !items.length) return { type: 'delete', col: colOf(id), id };
     const json = JSON.stringify(items);
     if (enc.encode(json).length > MAX_JSON) throw tmpl('too-large', 'חבילת שאלות גדולה מדי');
-    return { type: 'set', col: 'bank', id, data: { kind: prefix === 'q' ? 'questions' : 'cases', n: items.length, json }, bytes: json.length };
+    return { type: 'set', col: colOf(id), id, data: { kind: prefix === 'q' ? 'questions' : 'cases', n: items.length, json }, bytes: json.length };
   };
-  // מציב פריט בחבילה: קיים -> מוחלף במקומו; חדש -> לחבילה האחרונה אם יש מקום, אחרת חבילה חדשה. מחזיר את מזהה החבילה שהשתנתה.
-  function place(prefix, item) {
+  const dirtyOps = () => { const ops = [...dirty].map(chunkOp); dirty.clear(); return ops; };
+  // מציב פריט בחבילה של הקבוצה המתאימה (priv=true -> bankPrivate). קיים באותה קבוצה -> מוחלף במקומו; עבר קבוצה -> מוסר מהישנה.
+  function place(prefix, item, priv = false) {
     const chunks = prefix === 'q' ? st.q : st.c, idx = prefix === 'q' ? st.qIdx : st.cIdx;
     const have = idx.get(item.uid);
-    if (have) { const arr = chunks.get(have); arr[arr.findIndex(x => x.uid === item.uid)] = item; return have; }
-    const ids = [...chunks.keys()].sort();
+    if (have && privChunk(have) === priv) { const arr = chunks.get(have); arr[arr.findIndex(x => x.uid === item.uid)] = item; dirty.add(have); return have; }
+    if (have) unplace(prefix, item.uid);
+    const group = prefix + (priv ? 'h-' : '-');
+    const ids = [...chunks.keys()].filter(i => i.startsWith(group)).sort();
     let target = ids[ids.length - 1];
     if (!target || chunks.get(target).length >= MAX_CHUNK_COUNT || sizeOf(chunks.get(target)) + sizeOf(item) > MAX_CHUNK_BYTES) {
-      target = prefix + '-' + String((ids.length ? Math.max(...ids.map(i => Number(i.slice(2)))) + 1 : 0)).padStart(3, '0');
+      target = group + String(ids.length ? Math.max(...ids.map(i => Number(i.slice(group.length)))) + 1 : 0).padStart(3, '0');
       chunks.set(target, []);
     }
-    chunks.get(target).push(item); idx.set(item.uid, target);
+    chunks.get(target).push(item); idx.set(item.uid, target); dirty.add(target);
     return target;
   }
   function unplace(prefix, uidv) {
     const chunks = prefix === 'q' ? st.q : st.c, idx = prefix === 'q' ? st.qIdx : st.cIdx;
     const id = idx.get(uidv); if (!id) return null;
-    chunks.set(id, chunks.get(id).filter(x => x.uid !== uidv)); idx.delete(uidv);
+    chunks.set(id, chunks.get(id).filter(x => x.uid !== uidv)); idx.delete(uidv); dirty.add(id);
     return id;
   }
   const dropEmpty = prefix => { const m = prefix === 'q' ? st.q : st.c; for (const [id, a] of m) if (!a.length) m.delete(id); };
+  // מיישב נראות: סיפורי מקרה ואיורים ציבוריים רק אם שאלה מפורסמת משתמשת בהם. מחזיר פעולות עדכון לדגל pub של האיורים.
+  function reconcile() {
+    const pubQ = [...st.q.values()].flat().filter(isPubQ);
+    const keysOf = bl => (bl || []).map(b => b.mediaKey).filter(Boolean);
+    const pubCases = new Set(pubQ.map(q => q.caseStudyId).filter(Boolean));
+    const pubMedia = new Set(pubQ.flatMap(q => [...keysOf(q.blocks), ...keysOf(q.rubric?.answer)]));
+    for (const c of [...st.c.values()].flat()) {
+      const pubC = pubCases.has(c.uid);
+      if (pubC) keysOf(c.blocks).forEach(k => pubMedia.add(k));
+      if (privChunk(st.cIdx.get(c.uid)) === pubC) place('c', c, !pubC);
+    }
+    const ops = []; let media = false;
+    for (const m of st.media.values()) {
+      const want = pubMedia.has(m.key);
+      if (!!m.pub !== want) { m.pub = want; media = true; for (let p = 0; p < m.parts; p++) ops.push({ type: 'update', col: 'bankMedia', id: `${m.id}-${p}`, data: { pub: want }, bytes: 100 }); }
+    }
+    return { ops, media };
+  }
+  // כתיבת כל השינויים הממתינים: חבילות ששונו + דגלי איורים (+ meta אם נראות איור השתנתה או נדרש במפורש)
+  async function persist({ withMeta = false } = {}) {
+    const r = reconcile(); const ops = [...dirtyOps(), ...r.ops];
+    await commit(ops); dropEmpty('q'); dropEmpty('c');
+    if (withMeta || r.media) await commit(metaOps());
+  }
 
   // ---------------- איורי המאגר המרכזי ----------------
   async function mediaOps(key, data) {
@@ -119,9 +168,9 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
     const { fs } = await firestore(); const ops = [];
     for (let i = 0; i < parts; i++) {
       const slice = data.subarray(i * PART_BYTES, (i + 1) * PART_BYTES);
-      ops.push({ type: 'set', col: 'bankMedia', id: `${h}-${i}`, data: { key, part: i, parts, size: data.length, data: fs.Bytes.fromUint8Array(slice) }, bytes: slice.length + 200 });
+      ops.push({ type: 'set', col: 'bankMedia', id: `${h}-${i}`, data: { key, part: i, parts, size: data.length, pub: false, data: fs.Bytes.fromUint8Array(slice) }, bytes: slice.length + 200 });
     }
-    st.media.set(key, { key, id: h, parts, size: data.length });
+    st.media.set(key, { key, id: h, parts, size: data.length, pub: false });   // פרטי כברירת מחדל; reconcile מפרסם רק איור שמשתמשת בו שאלה מפורסמת
     return ops;
   }
   const mediaDeleteOps = key => {
@@ -223,7 +272,7 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
     async putMedia(key, data) {
       if (isUser(key)) return personalImpl.putUserMedia(key, data);
       needAdmin(); await ensure();
-      const ops = await mediaOps(key, data); await commit(ops); await commit([metaOp()]);
+      const ops = await mediaOps(key, data); await commit(ops); await commit(metaOps());
     },
     async getMedia(key) {
       if (isUser(key)) return personalImpl.getUserMedia(key);
@@ -253,72 +302,69 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
     // ----- מאגר מרכזי: כתיבה (מנהל בלבד; נאכף בכללי Firestore) -----
     async saveBankQuestion(q) {
       needAdmin(); await ensure();
-      const id = place('q', strip(q)); await commit([chunkOp('q', id)]); await audit('save-question', q.uid, q.published === false ? 'hidden' : 'published');
+      place('q', strip(q), !isPubQ(q)); await persist(); await audit('save-question', q.uid, q.published === false ? 'hidden' : 'published');
     },
     async deleteBankQuestion(u) {
       needAdmin(); await ensure();
-      const id = unplace('q', u); if (!id) return;
-      await commit([chunkOp('q', id)]); dropEmpty('q'); await audit('delete-question', u);
+      if (!unplace('q', u)) return;
+      await persist(); await audit('delete-question', u);
     },
     async saveTaxonomy(value) {
-      needAdmin(); await ensure(); st.meta.taxonomy = strip(value); await commit([metaOp()]); await audit('save-taxonomy', '', Object.keys(value.domains || {}).length + ' domains');
+      needAdmin(); await ensure(); st.meta.taxonomy = strip(value); await commit(metaOps()); await audit('save-taxonomy', '', Object.keys(value.domains || {}).length + ' domains');
     },
     async importPackage(parsed, opts) {
       needAdmin(); await ensure();
       const { pkg, questions, cases, media } = parsed; const publish = opts ? opts.publish !== false : true;
       const res = { added: 0, skipped: 0, conflicts: 0, mediaAdded: 0, casesAdded: 0 };
-      const touchedQ = new Set(), touchedC = new Set(), ops = [];
+      const ops = [];
       const sig = q => JSON.stringify([q.blocks, q.rubric]);
       if (!opts) { // החלפת חבילה קיימת
-        for (const [u] of [...st.qIdx]) { const ex = [...st.q.values()].flat().find(x => x.uid === u); if (ex?.pkgId === pkg.id) touchedQ.add(unplace('q', u)); }
-        for (const [u] of [...st.cIdx]) { const ex = [...st.c.values()].flat().find(x => x.uid === u); if (ex?.pkgId === pkg.id) touchedC.add(unplace('c', u)); }
+        for (const [u] of [...st.qIdx]) { const ex = [...st.q.values()].flat().find(x => x.uid === u); if (ex?.pkgId === pkg.id) unplace('q', u); }
+        for (const [u] of [...st.cIdx]) { const ex = [...st.c.values()].flat().find(x => x.uid === u); if (ex?.pkgId === pkg.id) unplace('c', u); }
         for (const k of [...st.media.keys()]) if (k.startsWith(pkg.id + '/')) ops.push(...mediaDeleteOps(k));
       }
       const existing = new Map([...st.q.values()].flat().map(x => [x.uid, x]));
       for (const q0 of questions) {
         const q = strip(q0); const ex = existing.get(q.uid);
-        if (!ex) { touchedQ.add(place('q', { ...q, published: publish })); res.added++; }
+        if (!ex) { place('q', { ...q, published: publish }, !publish); res.added++; }
         else {
           if (sig(ex) === sig(q)) res.skipped++;
-          else { ex.reviewFlag = true; ex.conflictNote = 'הגיעה גרסה שונה בייבוא חוזר'; touchedQ.add(place('q', ex)); res.conflicts++; }
+          else { ex.reviewFlag = true; ex.conflictNote = 'הגיעה גרסה שונה בייבוא חוזר'; place('q', ex, !isPubQ(ex)); res.conflicts++; }
         }
       }
       const existingC = new Set([...st.c.values()].flat().map(x => x.uid));
-      for (const c of cases) if (!existingC.has(c.uid)) { touchedC.add(place('c', strip(c))); res.casesAdded++; }
+      for (const c of cases) if (!existingC.has(c.uid)) { place('c', strip(c), true); res.casesAdded++; }   // פרטי עד ש-reconcile מוצא שאלה מפורסמת שמשתמשת בו
       for (const [key, data] of media) if (!st.media.has(key) || !opts) { ops.push(...await mediaOps(key, data)); res.mediaAdded++; }
       st.meta.packages = [...st.meta.packages.filter(p => p.id !== pkg.id), strip(pkg)];
-      await commit(ops);                                  // קודם איורים
-      await commit([...touchedQ].filter(Boolean).map(i => chunkOp('q', i)).concat([...touchedC].filter(Boolean).map(i => chunkOp('c', i))));
-      dropEmpty('q'); dropEmpty('c');
-      await commit([metaOp()]);                           // meta אחרון: מצביע על מה שכבר נכתב
+      await commit(ops);                                  // קודם איורים (פרטיים)
+      await persist({ withMeta: true });                  // חבילות שאלות/מקרים + דגלי איורים; meta אחרון: מצביע על מה שכבר נכתב
       await audit('import-package', pkg.id, JSON.stringify(res));
       return res;
     },
     async removePackage(id) {
       needAdmin(); await ensure();
-      const touchedQ = new Set(), touchedC = new Set(), ops = [];
-      for (const x of [...st.q.values()].flat()) if (x.pkgId === id) touchedQ.add(unplace('q', x.uid));
-      for (const x of [...st.c.values()].flat()) if (x.pkgId === id) touchedC.add(unplace('c', x.uid));
+      const ops = [];
+      for (const x of [...st.q.values()].flat()) if (x.pkgId === id) unplace('q', x.uid);
+      for (const x of [...st.c.values()].flat()) if (x.pkgId === id) unplace('c', x.uid);
       for (const k of [...st.media.keys()]) if (k.startsWith(id + '/')) ops.push(...mediaDeleteOps(k));
       st.meta.packages = st.meta.packages.filter(p => p.id !== id);
-      await commit([...touchedQ].map(i => chunkOp('q', i)).concat([...touchedC].map(i => chunkOp('c', i))).concat(ops));
-      dropEmpty('q'); dropEmpty('c'); await commit([metaOp()]); await audit('remove-package', id);
+      await commit(ops); await persist({ withMeta: true }); await audit('remove-package', id);
     },
     // שחזור מגיבוי: כותב את המצב החדש ואז מוחק שאריות. לא אטומי – לכן ממשק המנהל מוריד גיבוי בטיחות לפני כן.
     async replaceCentral({ packages, questions, cases, media, taxonomy }) {
       needAdmin(); const old = await readCentral();
       const oldQ = [...old.q.keys()], oldC = [...old.c.keys()], oldMedia = [...old.media.keys()];
-      st = { meta: { rev: old.meta.rev, packages: strip(packages), taxonomy: strip(taxonomy || { domains: {}, types: {} }), media: [] }, q: new Map(), c: new Map(), qIdx: new Map(), cIdx: new Map(), media: new Map() };
-      for (const q of questions) place('q', strip(q));
-      for (const c of cases) place('c', strip(c));
+      dirty.clear();
+      st = mkSt({ rev: old.meta.rev, packages: strip(packages), taxonomy: strip(taxonomy || { domains: {}, types: {} }), media: [] }, new Map(), new Map());
+      for (const q of questions) place('q', strip(q), !isPubQ(q));
+      for (const c of cases) place('c', strip(c), true);                       // reconcile מפרסם רק מקרים שנדרשים לשאלה מפורסמת
       const ops = [];
       for (const [key, data] of media) if (!isUser(key)) ops.push(...await mediaOps(key, data));
       await commit(ops);
-      await commit([...st.q.keys()].map(i => chunkOp('q', i)).concat([...st.c.keys()].map(i => chunkOp('c', i))));
-      await commit([metaOp()]);
+      await persist({ withMeta: true });
       const del = [];
-      for (const i of oldQ) if (!st.q.has(i)) del.push({ type: 'delete', col: 'bank', id: i });
-      for (const i of oldC) if (!st.c.has(i)) del.push({ type: 'delete', col: 'bank', id: i });
+      for (const i of oldQ) if (!st.q.has(i)) del.push({ type: 'delete', col: colOf(i), id: i });
+      for (const i of oldC) if (!st.c.has(i)) del.push({ type: 'delete', col: colOf(i), id: i });
       for (const k of oldMedia) if (!st.media.has(k)) { const m = old.media.get(k); for (let p = 0; p < m.parts; p++) del.push({ type: 'delete', col: 'bankMedia', id: `${m.id}-${p}` }); }
       await commit(del); await audit('replace-central', '', `${questions.length} questions`);
     },

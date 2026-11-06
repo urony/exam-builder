@@ -11,7 +11,7 @@ Firebase Console → Authentication → Settings → Authorized domains → Add 
 
 ## 2. פרסום כללי Firestore
 Firebase Console → Firestore Database → Rules. מוחקים את התוכן (`allow read, write: if false`), מדביקים את כל תוכן הקובץ `firestore.rules` מהמאגר ולוחצים Publish.
-- הכללים נבדקו באמולטור (66 בדיקות כללים + 34 בדיקות של הקוד האמיתי).
+- הכללים נבדקו באמולטור (117 בדיקות כללים + 50 בדיקות של הקוד האמיתי), כולל הוכחה שמורה לא קורא שאלות/מקרים/איורים מוסתרים (`bankPrivate`, `bankMedia` עם `pub=false`).
 - אחרי הפרסום: מורה מחובר קורא את המאגר המרכזי ושולח הצעות; רק מנהל כותב.
 - אם משהו נכשל: לא פותחים את הכללים. בודקים את הודעת השגיאה ב"פרטים טכניים" באתר.
 

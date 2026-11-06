@@ -102,7 +102,52 @@ t(finalBank.questions.find(q => q.uid === 'personal-1') === undefined, 'השאל
 // 5. מנהל: עריכה, הסתרה, מחיקה, הסרת חבילה, שחזור, ויומן ביקורת
 const edit = { ...finalBank.questions.find(q => q.uid === 'synthetic-pkg:q3'), published: false, adminEdited: true };
 await ADMIN.saveBankQuestion(edit);
-t((await A.loadBank()).questions.find(q => q.uid === 'synthetic-pkg:q3').published === false, 'הסתרה נשמרה');
+t(!(await A.loadBank()).questions.some(q => q.uid === 'synthetic-pkg:q3'), 'שאלה שהוסתרה אינה מגיעה למורה');
+t((await ADMIN.loadBank()).questions.find(q => q.uid === 'synthetic-pkg:q3')?.published === false, 'המנהל עדיין רואה את השאלה המוסתרת');
+await ADMIN.saveBankQuestion({ ...edit, published: true });
+t((await A.loadBank()).questions.some(q => q.uid === 'synthetic-pkg:q3' && q.published !== false), 'פרסום מחדש: השאלה חוזרת למורה');
+await ADMIN.saveBankQuestion(edit);
+await ADMIN.deleteBankQuestion('synthetic-pkg:q4');
+
+// 5ב. אבטחת תוכן מוסתר: מורה לא מקבל שאלות/מקרים/איורים לא מפורסמים, גם בפנייה ישירה ל-Firestore
+const HIDDEN_MARK = 'סוד-שלא-לפרסם';
+const hid = syntheticPackage(3, { pkgId: 'hid', imageBytes: 300_000 });
+hid.questions[0].blocks[0].text = HIDDEN_MARK + ' שאלה 1'; hid.questions[1].blocks[0].text = HIDDEN_MARK + ' שאלה 2'; hid.cases[0].blocks[0].text = HIDDEN_MARK + ' מקרה';
+const hres = await ADMIN.importPackage(hid, { publish: false });
+t(hres.added === 3 && hres.casesAdded === 1 && hres.mediaAdded === 1, 'ייבוא כמוסתר: ' + JSON.stringify(hres));
+const rawTeacher = async (uidv, cols) => { const { fs: tf, db: tdb } = fsFor(uidv); const out = []; for (const c of cols) { try { for (const d of (await tf.getDocs(tf.collection(tdb, c))).docs) out.push(JSON.stringify(d.data()) + d.id); } catch (e) { out.push('DENIED:' + c + ':' + e.code); } } return out; };
+const leaks = async uidv => (await rawTeacher(uidv, ['bank', 'bankPrivate', 'suggestions', 'suggestionMedia'])).filter(s => !s.startsWith('DENIED') && (s.includes(HIDDEN_MARK) || s.includes('hid:q') || s.includes('hid:c1') || s.includes('hid/q1.png')));
+t((await leaks('teacherA')).length === 0, 'קריאה ישירה של כל bank: אין שאלה/מקרה/מפתח איור מוסתר');
+t((await rawTeacher('teacherA', ['bankPrivate']))[0].startsWith('DENIED:bankPrivate:permission-denied'), 'קריאת bankPrivate ע״י מורה נחסמת');
+const hmId = (await hashKey('hid/q1.png')) + '-0';
+{ const { fs: tf, db: tdb } = fsFor('teacherA');
+  await rejectsCode(tf.getDoc(tf.doc(tdb, 'bankMedia', hmId)), 'permission-denied');
+  await rejectsCode(tf.getDocs(tf.collection(tdb, 'bankMedia')), 'permission-denied');
+  await rejectsCode(tf.getDocs(tf.query(tf.collection(tdb, 'bankMedia'), tf.where('pub', '==', false))), 'permission-denied');
+  await rejectsCode(tf.updateDoc(tf.doc(tdb, 'bankMedia', hmId), { pub: true }), 'permission-denied'); }
+const hbank = await mk('teacherA').loadBank();
+t(!hbank.questions.some(q => q.pkgId === 'hid') && !hbank.cases.some(c => c.pkgId === 'hid'), 'מורה לא מקבל שאלות/מקרה מוסתרים');
+t(await mk('teacherA').getMedia('hid/q1.png') === null, 'מורה לא מקבל איור של שאלה מוסתרת');
+const hadm = await ADMIN.loadBank();
+t(hadm.questions.filter(q => q.pkgId === 'hid').length === 3 && hadm.cases.some(c => c.pkgId === 'hid') && (await mk('ADMIN', { isAdmin: true }).getMedia('hid/q1.png')).length === 300_000, 'המנהל רואה ומקבל הכול (שאלות, מקרה, איור)');
+// פרסום שאלה 2 (משתמשת בסיפור המקרה) -> מופיעה עם המקרה; שאלה 1 (עם האיור) עדיין מוסתרת -> האיור פרטי
+const h2 = hadm.questions.find(q => q.uid === 'hid:q2'), h1 = hadm.questions.find(q => q.uid === 'hid:q1');
+await ADMIN.saveBankQuestion({ ...h2, published: true });
+const b2 = await mk('teacherA').loadBank();
+t(b2.questions.some(q => q.uid === 'hid:q2') && !b2.questions.some(q => q.uid === 'hid:q1' || q.uid === 'hid:q3') && b2.cases.some(c => c.uid === 'hid:c1'), 'פרסום שאלה בודדת: רק היא והמקרה שלה נחשפים');
+t(await mk('teacherA').getMedia('hid/q1.png') === null, 'האיור נשאר פרטי כל עוד שאלה 1 מוסתרת');
+await ADMIN.saveBankQuestion({ ...h1, published: true });
+t((await mk('teacherA').getMedia('hid/q1.png'))?.length === 300_000, 'פרסום שאלה 1: האיור נגיש למורה');
+await ADMIN.saveBankQuestion({ ...h1, published: false });
+t(await mk('teacherA').getMedia('hid/q1.png') === null && !(await mk('teacherA').loadBank()).questions.some(q => q.uid === 'hid:q1'), 'הסתרה חוזרת: שאלה ואיור נעלמים מהמורה');
+{ const { fs: tf, db: tdb } = fsFor('teacherB'); await rejectsCode(tf.getDoc(tf.doc(tdb, 'bankMedia', hmId)), 'permission-denied'); }
+t((await leaks('teacherB')).filter(s => s.includes('hid:q1') || s.includes('hid:q3') || s.includes('hid/q1.png')).length === 0, 'אחרי הסתרה חוזרת: אין זליגה למורה ב׳');
+await ADMIN.removePackage('hid');
+t(!(await mk('ADMIN', { isAdmin: true }).loadBank()).questions.some(q => q.pkgId === 'hid'), 'הסרת חבילה מוסתרת מנקה גם את bankPrivate');
+// ייבוא מוסתר לא משנה את מה שמורה כבר רואה
+t((await A.loadBank()).questions.filter(q => q.pkgId === 'synthetic-pkg').length >= 127, 'מורה ממשיך לראות את המאגר המפורסם');
+// מורה מזייף דגל מנהל וכותב לשטח הפרטי
+await rejectsCode(FORGED.saveBankQuestion({ uid: 'evil-hidden', published: false, blocks: [] }), 'permission-denied');
 await ADMIN.deleteBankQuestion('synthetic-pkg:q4');
 t(!(await A.loadBank()).questions.some(q => q.uid === 'synthetic-pkg:q4'), 'מחיקה');
 const audit = (await ffs.getDocs(ffs.collection(adb, 'audit'))).docs.map(d => d.data());
@@ -116,10 +161,11 @@ t(await A.getMedia('synthetic-pkg/q1.png') === null, 'איור החבילה הו
 const mediaLeft = (await ffs.getDocs(ffs.collection(adb, 'bankMedia'))).docs.filter(d => d.data().key.startsWith('synthetic-pkg/')).length;
 t(mediaLeft === 0, 'אין שאריות איור ב-Firestore');
 await ADMIN.replaceCentral({ packages: snapshot.packages, questions: snapshot.questions, cases: snapshot.cases, media: new Map([['synthetic-pkg/q1.png', pkg.media.get('synthetic-pkg/q1.png')]]), taxonomy: { domains: { cardiology: 'קרדיולוגיה' }, types: {} } });
-const restored = await B.loadBank();
-t(restored.questions.length === snapshot.questions.length && (await B.getMedia('synthetic-pkg/q1.png')).length === 1_600_000, 'שחזור הוחזר במלואו');
+const restored = await ADMIN.loadBank();
+t(restored.questions.length === snapshot.questions.length && (await mk('teacherB').getMedia('synthetic-pkg/q1.png')).length === 1_600_000, 'שחזור הוחזר במלואו (כולל שאלה מוסתרת אצל המנהל)');
+t(!(await B.loadBank()).questions.some(q => q.uid === 'synthetic-pkg:q3') && restored.questions.some(q => q.uid === 'synthetic-pkg:q3' && q.published === false), 'שחזור שומר הסתרה: מורה לא רואה, מנהל רואה');
 await rejectsCode(FORGED.replaceCentral({ packages: [], questions: [], cases: [], media: new Map() }), 'permission-denied');
-t((await B.loadBank()).questions.length === snapshot.questions.length, 'ניסיון replace ע״י מורה לא מחק דבר');
+t((await ADMIN.loadBank()).questions.length === snapshot.questions.length, 'ניסיון replace ע״י מורה לא מחק דבר');
 
 // 6. תקלות רשת/הרשאה בקריאה: חוזרים למאגר המקומי ומדווחים (לא מוסתר)
 const flaky = mk('teacherA', { wrap: real => ({ ...real, getDocs: async () => { throw Object.assign(new Error('offline'), { code: 'unavailable' }); } }) });

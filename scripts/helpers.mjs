@@ -29,7 +29,7 @@ export function syntheticPackage(n = 5, { pkgId = 'synthetic-pkg', imageBytes = 
       { type: 'table', rows: [[['תא א', 'שורה 2'], 'תא ב'], [null, 'תא ד']] },   // מערך מקונן: חייב לשרוד שמירה ב-Firestore
     ];
     if (imageBytes && i === 1) { blocks.push({ type: 'image', mediaKey: pkgId + '/q1.png', caption: 'איור' }); media.set(pkgId + '/q1.png', Uint8Array.from({ length: imageBytes }, (_, k) => (k * 7 + 3) & 255)); }
-    questions.push({ uid: `${pkgId}:q${i}`, pkgId, kind: 'teacher', year: null, domainId: 'cardiology', typeId: 'open', title: 'ש' + i, points: 5, blocks, rubric: { answer: [{ type: 'text', text: 'תשובה ' + i }] }, searchText: 'שאלה ' + i, addDomainIds: [], issues: [], corrections: [] });
+    questions.push({ uid: `${pkgId}:q${i}`, pkgId, kind: 'teacher', year: null, domainId: 'cardiology', typeId: 'open', title: 'ש' + i, points: 5, blocks, rubric: { answer: [{ type: 'text', text: 'תשובה ' + i }] }, searchText: 'שאלה ' + i, addDomainIds: [], issues: [], corrections: [], ...(i === 2 ? { caseStudyId: pkgId + ':c1' } : {}) });
   }
   const cases = [{ uid: pkgId + ':c1', pkgId, blocks: [{ type: 'text', text: 'סיפור מקרה' }] }];
   return { pkg: { id: pkgId, fileName: pkgId + '.zip', kind: 'teacher', questionCount: n, mediaCount: media.size, taxonomy: { types: { open: 'פתוחה' }, domains: { cardiology: 'קרדיולוגיה' } } }, questions, cases, media };

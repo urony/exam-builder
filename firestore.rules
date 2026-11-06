@@ -26,15 +26,22 @@ service cloud.firestore {
       allow list, write: if false;
     }
 
-    // המאגר המרכזי: מסמך meta, חבילות שאלות וסיפורי מקרה. קריאה למחוברים, כתיבה למנהל בלבד.
+    // המאגר המרכזי – תוכן מפורסם בלבד: meta ציבורי, חבילות שאלות וסיפורי מקרה של שאלות מפורסמות.
+    // קריאה למחוברים, כתיבה למנהל בלבד. שאלות מוסתרות/טיוטות לעולם אינן נשמרות כאן (ראו bankPrivate).
     match /bank/{docId} {
       allow read: if signedIn();
       allow write: if isAdmin();
     }
 
-    // איורי המאגר המרכזי (חלקים עד ~800KB).
+    // תוכן מוסתר/לא מפורסם (שאלות מוסתרות, מקרים ואיורים שלהן): מנהל בלבד, קריאה וכתיבה.
+    match /bankPrivate/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    // איורי המאגר המרכזי (חלקים עד ~800KB). מורה קורא רק חלק שדגל pub שלו true (איור של שאלה מפורסמת); מנהל קורא הכול.
+    // קריאה ישירה לכל מסמך שאינו pub נחסמת; רשימה (list) מותרת למורה רק בשאילתה שמסננת pub==true.
     match /bankMedia/{docId} {
-      allow read: if signedIn();
+      allow read: if isAdmin() || (signedIn() && resource.data.get('pub', false) == true);
       allow write: if isAdmin();
     }
 
@@ -58,8 +65,14 @@ service cloud.firestore {
     match /suggestionMedia/{id} {
       allow create: if isOwner(request.resource.data.authorUid)
         && request.resource.data.keys().hasOnly(['sgId', 'authorUid', 'key', 'part', 'parts', 'data', 'tag'])
-        && request.resource.data.sgId is string && request.resource.data.key is string
-        && request.resource.data.part is int && request.resource.data.parts is int && request.resource.data.parts <= 20
+        && request.resource.data.sgId is string && request.resource.data.sgId.matches('^sg-[A-Za-z0-9_.:-]{1,150}$')
+        && request.resource.data.key is string && request.resource.data.key.size() > 0 && request.resource.data.key.size() <= 300
+        && request.resource.data.tag is string && request.resource.data.tag.size() > 0 && request.resource.data.tag.size() <= 20
+        && request.resource.data.part is int && request.resource.data.parts is int
+        && request.resource.data.parts >= 1 && request.resource.data.parts <= 20
+        && request.resource.data.part >= 0 && request.resource.data.part < request.resource.data.parts
+        && request.resource.data.tag.matches('^[A-Za-z0-9]{1,20}$')
+        && id.matches('^' + request.resource.data.sgId + '-' + request.resource.data.tag + '-.*-' + string(request.resource.data.part) + '$')   // מזהה המסמך קשור להצעה, לשליחה ולמספר החלק
         && request.resource.data.data is bytes && request.resource.data.data.size() <= 900000;
       allow get, list: if signedIn() && (resource.data.authorUid == request.auth.uid || isAdmin());
       allow update, delete: if isAdmin();

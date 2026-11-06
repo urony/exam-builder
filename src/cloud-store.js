@@ -68,6 +68,9 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
   const isPubQ = q => q.published !== false;
   const privChunk = id => id[1] === 'h';
   const colOf = id => (privChunk(id) ? 'bankPrivate' : 'bank');
+  // שדות ניהול פנימיים: לא נכתבים לעותק הציבורי של שאלה. נשמרים ב-bankPrivate/adm (מנהל בלבד) וממוזגים בקריאה של מנהל.
+  const ADM_FIELDS = ['reviewFlag', 'conflictNote', 'adminEdited', 'fromSuggestion', 'approvedAt'];
+  const pubView = it => { const o = { ...it }; for (const f of ADM_FIELDS) delete o[f]; return o; };
   const dirty = new Set();                                  // חבילות ששונו ממתינות לכתיבה
   const mkSt = (meta, q, c, privMedia = []) => {
     const idx = m => { const r = new Map(); for (const [id, items] of m) for (const it of items) r.set(it.uid, id); return r; };
@@ -77,11 +80,12 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
   async function readCentral() {
     const { fs, db } = await firestore();
     const meta = { rev: 0, packages: [], taxonomy: { domains: {}, types: {} }, media: [] };
-    const q = new Map(), c = new Map(); let privMedia = [];
+    const q = new Map(), c = new Map(); let privMedia = [], adm = null, admRaw = null;
     const take = (snap, isPriv) => {
       for (const d of snap.docs) {
         const v = d.data();
         if (d.id === 'meta') { if (isPriv) privMedia = JSON.parse(v.json).media || []; else Object.assign(meta, JSON.parse(v.json)); }
+        else if (isPriv && d.id === 'adm') { admRaw = v.json; adm = JSON.parse(v.json); }
         else if (d.id.startsWith('q')) q.set(d.id, JSON.parse(v.json));
         else if (d.id.startsWith('c')) c.set(d.id, JSON.parse(v.json));
       }
@@ -89,7 +93,8 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
     take(await fs.getDocs(fs.collection(db, 'bank')), false);
     if (isAdmin) take(await fs.getDocs(fs.collection(db, 'bankPrivate')), true);   // מורה לא מנסה לקרוא (ייחסם בכללים)
     dirty.clear();
-    st = mkSt(meta, q, c, privMedia);
+    if (adm) for (const [id, items] of q) if (!privChunk(id)) for (const it of items) if (adm[it.uid]) Object.assign(it, adm[it.uid]);
+    st = mkSt(meta, q, c, privMedia); st.admJson = admRaw;
     return st;
   }
   const ensure = async () => st || readCentral();
@@ -109,9 +114,19 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
   const chunkOp = id => {
     const prefix = id[0], items = (prefix === 'q' ? st.q : st.c).get(id);
     if (!items || !items.length) return { type: 'delete', col: colOf(id), id };
-    const json = JSON.stringify(items);
+    const json = JSON.stringify(prefix === 'q' && !privChunk(id) ? items.map(pubView) : items);
     if (enc.encode(json).length > MAX_JSON) throw tmpl('too-large', 'חבילת שאלות גדולה מדי');
     return { type: 'set', col: colOf(id), id, data: { kind: prefix === 'q' ? 'questions' : 'cases', n: items.length, json }, bytes: json.length };
+  };
+  // מסמך שדות הניהול של שאלות ציבוריות (נכתב רק כשהשתנה)
+  const admOp = () => {
+    const m = {};
+    for (const [id, items] of st.q) if (!privChunk(id)) for (const it of items) { const f = {}; for (const k of ADM_FIELDS) if (it[k] !== undefined) f[k] = it[k]; if (Object.keys(f).length) m[it.uid] = f; }
+    const json = JSON.stringify(m);
+    if (json === (st.admJson ?? '{}')) return [];
+    if (enc.encode(json).length > MAX_JSON) throw tmpl('too-large', 'מסמך שדות הניהול גדול מדי');
+    st.admJson = json;
+    return [{ type: 'set', col: 'bankPrivate', id: 'adm', data: { kind: 'adm', json }, bytes: json.length }];
   };
   const dirtyOps = () => { const ops = [...dirty].map(chunkOp); dirty.clear(); return ops; };
   // מציב פריט בחבילה של הקבוצה המתאימה (priv=true -> bankPrivate). קיים באותה קבוצה -> מוחלף במקומו; עבר קבוצה -> מוסר מהישנה.
@@ -157,7 +172,7 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
   }
   // כתיבת כל השינויים הממתינים: חבילות ששונו + דגלי איורים (+ meta אם נראות איור השתנתה או נדרש במפורש)
   async function persist({ withMeta = false } = {}) {
-    const r = reconcile(); const ops = [...dirtyOps(), ...r.ops];
+    const r = reconcile(); const ops = [...dirtyOps(), ...r.ops, ...admOp()];
     await commit(ops); dropEmpty('q'); dropEmpty('c');
     if (withMeta || r.media) await commit(metaOps());
   }
@@ -356,6 +371,7 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
       const oldQ = [...old.q.keys()], oldC = [...old.c.keys()], oldMedia = [...old.media.keys()];
       dirty.clear();
       st = mkSt({ rev: old.meta.rev, packages: strip(packages), taxonomy: strip(taxonomy || { domains: {}, types: {} }), media: [] }, new Map(), new Map());
+      st.admJson = old.admJson;
       for (const q of questions) place('q', strip(q), !isPubQ(q));
       for (const c of cases) place('c', strip(c), true);                       // reconcile מפרסם רק מקרים שנדרשים לשאלה מפורסמת
       const ops = [];

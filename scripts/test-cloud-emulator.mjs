@@ -29,6 +29,7 @@ function mk(uid, { isAdmin = false, wrap } = {}) {
   store.errors = errors; return store;
 }
 const rejectsCode = async (p, code) => { try { await p; } catch (e) { assert.ok(!code || e.code === code || String(e.message).includes(code), 'קוד שגיאה צפוי ' + code + ' קיבלנו ' + e.code + ' / ' + e.message); return; } assert.fail('היה אמור להיכשל'); };
+async function rawTeacherEarly(cols) { const { fs: tf, db: tdb } = fsFor('teacherA'); const out = []; for (const c of cols) { try { for (const d of (await tf.getDocs(tf.collection(tdb, c))).docs) out.push(JSON.stringify(d.data()) + d.id); } catch (e) { out.push('DENIED:' + c); } } return out; }
 let n = 0; const t = (ok, msg) => { assert.ok(ok, msg); n++; };
 
 const ADMIN = mk('ADMIN', { isAdmin: true }), A = mk('teacherA'), B = mk('teacherB');
@@ -57,8 +58,13 @@ t((await B.loadBank()) && (await B.loadTaxonomy()).domains.cardiology === 'קר�
 // ייבוא חוזר: זהה מדולג, שונה מסומן ולא נדרס
 const again = await ADMIN.importPackage({ ...pkg, questions: pkg.questions.map((q, i) => i === 0 ? { ...q, blocks: [{ type: 'text', text: 'שונה' }] } : q) }, { publish: true });
 t(again.added === 0 && again.skipped === 129 && again.conflicts === 1, 'ייבוא חוזר: ' + JSON.stringify(again));
-const q1b = (await A.loadBank()).questions.find(q => q.uid === 'synthetic-pkg:q1');
-t(q1b.reviewFlag === true && q1b.blocks[0].text === 'שאלה סינתטית מספר 1', 'שאלה שונה סומנה לבדיקה ולא נדרסה');
+const q1b = (await ADMIN.loadBank()).questions.find(q => q.uid === 'synthetic-pkg:q1');
+t(q1b.reviewFlag === true && q1b.conflictNote && q1b.blocks[0].text === 'שאלה סינתטית מספר 1', 'שאלה שונה סומנה לבדיקה ולא נדרסה (המנהל רואה את הסימון)');
+{ const q1t = (await A.loadBank()).questions.find(q => q.uid === 'synthetic-pkg:q1');
+  t(q1t && q1t.reviewFlag === undefined && q1t.conflictNote === undefined && q1t.blocks[0].text === 'שאלה סינתטית מספר 1', 'מורה מקבל את השאלה בלי שדות ניהול');
+  const raw = (await rawTeacherEarly(['bank', 'bankPrivate'])).join('|');
+  t(!raw.includes('reviewFlag') && !raw.includes('conflictNote') && !raw.includes('הגיעה גרסה שונה'), 'קריאה ישירה: אין שדות ניהול בעותק הציבורי');
+  t(raw.includes('DENIED:bankPrivate'), 'bankPrivate חסום למורה'); }
 
 // 2. מורה לא יכול לכתוב למאגר (גם כשהוא מזייף דגל מנהל בלקוח)
 await rejectsCode(A.saveBankQuestion({ ...q1, title: 'האקר' }), 'not-admin');
@@ -95,6 +101,7 @@ await ADMIN.saveBankQuestion({ ...approvedQ, uid: nid, pkgId: 'approved', kind: 
 await ADMIN.saveSuggestion({ ...sug, status: 'approved', draftUid: nid });
 const finalBank = await B.loadBank();
 t(finalBank.questions.some(q => q.uid === nid && q.published === true), 'אחרי אישור: השאלה במאגר המרכזי');
+t(finalBank.questions.find(q => q.uid === nid).fromSuggestion === undefined && (await ADMIN.loadBank()).questions.find(q => q.uid === nid).fromSuggestion === sug.id, 'fromSuggestion נשמר למנהל בלבד');
 t((await B.getMedia(`central/${nid}/img1`)).length === 1_000_000, 'תמונת השאלה המאושרת נגישה למורה ב׳');
 t((await A.loadSuggestions())[0].status === 'approved', 'מורה א׳ רואה שההצעה אושרה');
 t(finalBank.questions.find(q => q.uid === 'personal-1') === undefined, 'השאלה האישית המקורית לא נחשפה');
@@ -163,6 +170,7 @@ t(mediaLeft === 0, 'אין שאריות איור ב-Firestore');
 await ADMIN.replaceCentral({ packages: snapshot.packages, questions: snapshot.questions, cases: snapshot.cases, media: new Map([['synthetic-pkg/q1.png', pkg.media.get('synthetic-pkg/q1.png')]]), taxonomy: { domains: { cardiology: 'קרדיולוגיה' }, types: {} } });
 const restored = await ADMIN.loadBank();
 t(restored.questions.length === snapshot.questions.length && (await mk('teacherB').getMedia('synthetic-pkg/q1.png')).length === 1_600_000, 'שחזור הוחזר במלואו (כולל שאלה מוסתרת אצל המנהל)');
+t(restored.questions.find(q => q.uid === 'synthetic-pkg:q1')?.reviewFlag === true && (await B.loadBank()).questions.find(q => q.uid === 'synthetic-pkg:q1').reviewFlag === undefined, 'שחזור שומר שדות ניהול למנהל בלבד');
 t(!(await B.loadBank()).questions.some(q => q.uid === 'synthetic-pkg:q3') && restored.questions.some(q => q.uid === 'synthetic-pkg:q3' && q.published === false), 'שחזור שומר הסתרה: מורה לא רואה, מנהל רואה');
 await rejectsCode(FORGED.replaceCentral({ packages: [], questions: [], cases: [], media: new Map() }), 'permission-denied');
 t((await ADMIN.loadBank()).questions.length === snapshot.questions.length, 'ניסיון replace ע״י מורה לא מחק דבר');

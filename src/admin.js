@@ -3,14 +3,16 @@
 import JSZip from 'jszip';
 import { cellLines } from './clean.js';
 import { KIND_LABEL } from './adapter.js';
+import { BULK_FIELDS, EMPTY_BULK, chosen, planBulk, runBulk, describe } from './admin-bulk.js';
 import { EMPTY_FILTERS, applyFilters, facets, sessionsOf, activeCount, packageOptions, yearOf, authorOf, submitterOf, submitterLabel, isPub, rubricKind, RUBRIC_LABEL, NO_YEAR, NO_SESSION, UNKNOWN_AUTHOR, UNKNOWN_KIND } from './admin-filters.js';
 
+const NL = String.fromCharCode(10);
 const clone = o => JSON.parse(JSON.stringify(o));
 const SUBS = [['home', 'סקירה'], ['import', 'ייבוא ZIP'], ['questions', 'ניהול שאלות'], ['suggestions', 'הצעות ממורים'], ['taxonomy', 'מילוני סיווג'], ['backup', 'גיבוי ושחזור']];
 
 export function createAdmin(ctx) {
   const { S, store, esc, toast, render, label } = ctx;
-  S.adm = { sub: 'home', f: EMPTY_FILTERS(), limit: 200, ix: new Map(), checked: new Set(), draft: null, publishOnImport: true, bulk: { domain: '', type: '' }, restoreMsg: '' };
+  S.adm = { sub: 'home', f: EMPTY_FILTERS(), limit: 200, ix: new Map(), checked: new Set(), draft: null, publishOnImport: true, bulk: EMPTY_BULK(), bulkMsg: '', restoreMsg: '' };
   const A = S.adm;
   const bankQs = () => S.questions.filter(q => q.kind !== 'personal');
   const stat = () => { const b = bankQs(); return { total: b.length, pub: b.filter(isPub).length, hidden: b.filter(q => !isPub(q)).length, flag: b.filter(q => q.reviewFlag).length, edited: b.filter(q => q.adminEdited).length, pending: S.suggestions.filter(s => s.status === 'pending').length }; };
@@ -69,7 +71,21 @@ export function createAdmin(ctx) {
       <div class="bulk" data-testid="count"><b>${act ? `${list.length} מתוך ${all.length} שאלות` : `${all.length} שאלות`}</b>${act ? ' <button class="btn sm" data-adm="resetf:">איפוס כל המסננים</button>' : ''} <button class="btn sm" data-adm="selall:">בחר הכול (${list.length})</button> <button class="btn sm" data-adm="selnone:">נקה בחירה</button>
         <span class="spacer"></span><span>${n ? `נבחרו ${n}:` : 'סמנו שאלות לפעולה מרובה'}</span>
         <button class="btn sm" data-adm="bulkpub:1" ${n ? '' : 'disabled'}>פרסם</button><button class="btn sm" data-adm="bulkpub:0" ${n ? '' : 'disabled'}>הסתר</button><button class="btn sm" data-adm="bulkflag:" ${n ? '' : 'disabled'}>סמן לבדיקה</button><button class="btn sm danger" data-adm="bulkdel:" ${n ? '' : 'disabled'}>מחק לצמיתות</button></div>
-      <div class="bulk"><b>שנה סיווג למסומנות:</b> <select data-admf="bdomain">${opt('domains', A.bulk.domain, 'תחום ראשי (ללא שינוי)')}</select> <select data-admf="btype">${opt('types', A.bulk.type, 'סוג שאלה (ללא שינוי)')}</select> <button class="btn sm primary" data-adm="bulkclass:" ${n && (A.bulk.domain || A.bulk.type) ? '' : 'disabled'}>עדכן רק את השדות שנבחרו</button></div>
+      <details class="admmore" ${A.bulkOpen ? 'open' : ''} data-admbulkdet><summary>עריכה קבוצתית של פרטי מקור וסיווג (${n ? n + ' שאלות נבחרו' : 'סמנו שאלות'})</summary>
+        <div class="hint">משתנים רק השדות שמילאתם. שדה ריק = ללא שינוי. ערכי שנה/מועד קודמים נשמרים בהיסטוריית השאלה. תוכן השאלות לא משתנה.</div>
+        <div class="admfilters">
+          <select data-admb="domain">${opt('domains', A.bulk.domain, 'תחום ראשי (ללא שינוי)')}</select>
+          <select data-admb="type">${opt('types', A.bulk.type, 'סוג שאלה (ללא שינוי)')}</select></div>
+        <div class="admfilters">
+          <input type="number" data-admb="year" placeholder="שנת בחינה" min="1990" max="2100" value="${esc(A.bulk.year)}" ${A.bulk.clearYear ? 'disabled' : ''}><label><input type="checkbox" data-admb="clearYear" ${A.bulk.clearYear ? 'checked' : ''}> נקה שנה</label>
+          <input data-admb="session" placeholder="מועד בחינה (למשל קיץ תשפ״ה)" value="${esc(A.bulk.session)}" ${A.bulk.clearSession ? 'disabled' : ''}><label><input type="checkbox" data-admb="clearSession" ${A.bulk.clearSession ? 'checked' : ''}> נקה מועד</label></div>
+        <div class="admfilters">
+          <input data-admb="author" list="authlist" placeholder="מחבר השאלה (שאלות מורים)" value="${esc(A.bulk.author)}" ${A.bulk.clearAuthor ? 'disabled' : ''}><label><input type="checkbox" data-admb="clearAuthor" ${A.bulk.clearAuthor ? 'checked' : ''}> נקה</label>
+          <input data-admb="authorAdmin" list="authlist" placeholder="שיוך מחבר ניהולי" value="${esc(A.bulk.authorAdmin)}" ${A.bulk.clearAuthorAdmin ? 'disabled' : ''}><label><input type="checkbox" data-admb="clearAuthorAdmin" ${A.bulk.clearAuthorAdmin ? 'checked' : ''}> נקה</label>
+          <datalist id="authlist">${facets(all).authors.map(([x]) => `<option value="${esc(x)}">`).join('')}</datalist></div>
+        <div class="hint">חבילת מקור אינה ניתנת לשינוי בעריכה קבוצתית: היא מזהה את מזהי השאלות, התמונות, המחוונים וסיפורי המקרה, ושינוי שלה עלול לשבור אותם. להעברת שאלות בין חבילות יש לייבא מחדש.</div>
+        <p><button class="btn sm primary" data-adm="bulkclass:" ${n && Object.keys(chosen(A.bulk).changes).length ? '' : 'disabled'}>עדכן את השדות שנבחרו (${n} שאלות)</button> <button class="btn sm" data-adm="bulkreset:">נקה טופס</button></p>
+        ${A.bulkMsg ? `<div class="rep">${esc(A.bulkMsg).split(String.fromCharCode(10)).join('<br>')}</div>` : ''}</details>
       <div class="admlist">${list.slice(0, A.limit).map(q => `<div class="qrow ${A.draft?.uid === q.uid ? 'sel' : ''}" data-adm="edit:${esc(q.uid)}"><input type="checkbox" data-admchk="${esc(q.uid)}" ${A.checked.has(q.uid) ? 'checked' : ''}><div><div class="t">${esc(q.title || q.blocks.find(b => b.text)?.text.slice(0, 80) || '')}</div><div class="s">${esc(ctx.srcLabel(q))}${q.session ? ' · ' + esc(q.session) : ''}${q.originalNumber ? ' · שאלה ' + esc(q.originalNumber) : ''} · ${esc(label('domains', q.domainId))}</div><div class="s">${esc(authorLine(q))}</div><div>${isPub(q) ? '<span class="badge ok">מפורסמת</span>' : '<span class="badge warn">מוסתרת</span>'}${q.reviewFlag ? '<span class="badge warn">לבדיקה</span>' : ''}${q.adminEdited ? '<span class="badge">נערכה</span>' : ''}<span class="badge ${rubricKind(q) === 'none' ? 'warn' : ''}">${RUBRIC_LABEL[rubricKind(q)]}</span></div></div></div>`).join('') || '<div class="empty">אין תוצאות</div>'}${list.length > A.limit ? `<div class="bulk">מוצגות ${A.limit} מתוך ${list.length}. <button class="btn sm" data-adm="more:">הצג עוד 200</button> או צמצמו בעזרת המסננים.</div>` : ''}</div></div>
       <div class="card detail">${A.draft ? editor() : '<div class="empty">בחרו שאלה לעריכה</div>'}</div></div>`;
   }
@@ -99,14 +115,19 @@ export function createAdmin(ctx) {
         <div>חילוץ: ${esc(q.extractionStatus || '—')} · אישור בחבילת המקור: ${esc(q.reviewStatus || '—')}${q.originalTypeId ? ` · סוג מקורי: ${esc(label('types', q.originalTypeId))}` : ''}${q.pkgId ? ` · חבילה: ${esc(q.pkgId)}` : ''}${q.session ? ` · מועד: ${esc(q.session)}` : ''}</div>
         ${(q.issues || []).map(i => `<div class="corr">${esc(i.severity)} · ${esc(i.type)}: ${esc(i.description)}</div>`).join('')}
         ${(q.corrections || []).map(c => `<div class="corr"><del>${esc(c.from)}</del><br><ins>${esc(c.to)}</ins></div>`).join('<hr>')}
+        ${(q.sourceHistory || []).map(h => `<div class="corr">${esc(new Date(h.at).toLocaleString('he-IL'))} · ${esc(BULK_FIELDS[h.field] || h.field)}: ${esc(h.from ?? '—')} ← ${esc(h.to ?? '—')}</div>`).join('')}
         ${orig ? `<div class="editnote">השאלה נערכה אחרי הייבוא – נוסחה אינו זהה למקור.</div>` : ''}</details>`;
   }
+  const sgSubmitter = s => s.credit && s.authorName ? s.authorName + ' (קרדיט מאושר)' : 'מורה ' + String(s.authorUid || '').slice(-4);
+  const sgTitle = s => s.question.title || s.question.blocks.find(b => b.text)?.text.slice(0, 70) || '(ללא כותרת)';
   function suggestionsV() {
     const list = S.suggestions.slice().sort((a, b) => b.submittedAt - a.submittedAt);
     if (!list.length) return '<div class="card empty">אין הצעות. (בשלב המקומי נוצרות הצעות מלשונית "המאגר האישי" באותו דפדפן.)</div>';
     return list.map(s => `<div class="card item"><div class="hd"><b>${esc(s.question.title || s.question.blocks.find(b => b.text)?.text.slice(0, 70) || '')}</b>
       <span class="badge">${{ pending: 'ממתינה', approved: 'אושרה', rejected: 'נדחתה', 'in-review': 'בעריכה (עותק מוסתר)' }[s.status]}</span>${s.credit ? `<span class="badge">קרדיט: ${esc(s.authorName)}</span>` : '<span class="badge">ללא קרדיט</span>'}
-      <span class="ctrl">${s.status === 'pending' || s.status === 'in-review' ? `<button class="btn sm primary" data-adm="approve:${esc(s.id)}">${s.status === 'in-review' ? 'פרסם כפי שהוא' : 'אשר והוסף למאגר'}</button><button class="btn sm" data-adm="editsg:${esc(s.id)}">${s.status === 'in-review' ? 'פתח לעריכה' : 'ערוך לפני אישור'}</button><button class="btn sm danger" data-adm="reject:${esc(s.id)}">דחה</button>` : ''}</span></div>
+      <span class="ctrl">${s.status === 'pending' || s.status === 'in-review' ? `<button class="btn sm primary" data-adm="approve:${esc(s.id)}">${s.status === 'in-review' ? 'פרסם כפי שהוא' : 'אשר והוסף למאגר'}</button><button class="btn sm" data-adm="editsg:${esc(s.id)}">${s.status === 'in-review' ? 'פתח לעריכה' : 'ערוך לפני אישור'}</button><button class="btn sm danger" data-adm="reject:${esc(s.id)}">דחה</button>` : ''}${s.status === 'pending' || s.status === 'rejected' ? `<button class="btn sm danger" data-adm="delsg:${esc(s.id)}">מחק לצמיתות</button>` : ''}</span></div>
+      ${s.status === 'approved' || s.status === 'in-review' ? '<div class="hint">הצעה שאושרה אינה נמחקת מכאן. השאלה שנוצרה ממנה במאגר המרכזי עצמאית, ומנוהלת בלשונית "ניהול שאלות".</div>' : ''}
+      <div class="hint">הוגש ע״י: ${esc(sgSubmitter(s))} · ${new Date(s.submittedAt).toLocaleDateString('he-IL')}</div>
       <div class="qbody">${ctx.blocksHtml(s.question.blocks)}</div></div>`).join('');
   }
   function taxonomyV() {
@@ -179,16 +200,18 @@ export function createAdmin(ctx) {
       for (const uid of A.checked) { await store.deleteBankQuestion(uid); S.questions = S.questions.filter(q => q.uid !== uid); }
       A.checked.clear(); A.draft = null; toast(`${n} שאלות נמחקו`); render(); return true;
     }
+    if (act === 'bulkreset') { A.bulk = EMPTY_BULK(); A.bulkMsg = ''; render(); return true; }
     if (act === 'bulkclass') {
-      const { domain, type } = A.bulk; const n = A.checked.size;
-      if (!confirm(`לעדכן ${n} שאלות? ישתנו רק: ${[domain && 'תחום ראשי', type && 'סוג שאלה'].filter(Boolean).join(' ו')}. שאר השדות לא ייגעו.`)) return true;
-      for (const q of S.questions.filter(q => A.checked.has(q.uid))) {
-        q.adminOrig ||= { domainId: q.domainId, typeId: q.typeId, addDomainIds: q.addDomainIds, blocks: q.blocks, rubric: q.rubric, title: q.title, points: q.points };
-        if (domain) { q.domainId = domain; q.addDomainIds = q.addDomainIds.filter(x => x !== domain); }
-        if (type) q.typeId = type;
-        q.adminEdited = true; await saveQ(q);
-      }
-      toast('הסיווג עודכן'); render(); return true;
+      const { changes, errors } = chosen(A.bulk); if (errors.length) { toast(errors[0]); return true; }
+      const sel = S.questions.filter(q => A.checked.has(q.uid)); const plan = planBulk(sel, changes, S.tax);
+      if (!plan.updates.length) { A.bulkMsg = 'אין מה לעדכן: ' + (plan.skipped.length ? plan.skipped.length + ' שאלות דולגו (' + plan.skipped[0].reason + ')' : 'הערכים כבר זהים'); render(); return true; }
+      const msg = ['לעדכן ' + plan.updates.length + ' מתוך ' + sel.length + ' השאלות שנבחרו?', '', 'שינויים: ' + describe(changes, S.tax.domains ? { domain: S.tax.domains, type: S.tax.types } : {}).join(' | '), plan.skipped.length ? plan.skipped.length + ' שאלות ידולגו: ' + plan.skipped[0].reason : '', ...plan.warnings, '', 'שאר השדות והתוכן לא ישתנו.'].filter(x => x !== '').join(NL);
+      if (!confirm(msg)) return true;
+      A.bulkMsg = 'מעדכן…'; const r = await runBulk(plan, saveQ);
+      A.bulkMsg = `עודכנו ${r.ok.length} שאלות${plan.skipped.length ? `, דולגו ${plan.skipped.length}` : ''}${r.failed.length ? `, נכשלו ${r.failed.length} (${r.failed[0].error}). השאלות שנכשלו נשארו מסומנות לניסיון חוזר.` : '.'}`;
+      if (r.failed.length) A.checked = new Set(r.failed.map(x => x.q.uid)); else A.checked.clear();
+      if (A.draft && r.ok.some(x => x.uid === A.draft.uid)) A.draft = clone(S.questions.find(x => x.uid === A.draft.uid));
+      A.bulk = EMPTY_BULK(); toast(r.failed.length ? 'העדכון הושלם חלקית' : 'העדכון הושלם'); render(); return true;
     }
     if (act === 'togglepub') {
       A.draft.published = !isPub(A.draft); await saveQ(clone(A.draft));
@@ -216,6 +239,20 @@ export function createAdmin(ctx) {
       else await approve(arg);
       render(); return true;
     }
+    if (act === 'delsg') {
+      const s = S.suggestions.find(x => x.id === arg); if (!s) return true;
+      if (!(s.status === 'pending' || s.status === 'rejected')) { toast('הצעה שאושרה אינה נמחקת'); return true; }
+      const imgs = (s.imageKeys || []).length;
+      if (!confirm(`האם אתה בטוח שברצונך למחוק את ההצעה לצמיתות? פעולה זו אינה ניתנת לביטול.
+
+שאלה: ${sgTitle(s)}
+מגיש: ${sgSubmitter(s)}
+סטטוס: ${s.status === 'pending' ? 'ממתינה' : 'נדחתה'}
+תמונות שיימחקו: ${imgs}`)) return true;
+      try { const r = await store.deleteSuggestion(s); S.suggestions = S.suggestions.filter(x => x.id !== s.id); toast(`ההצעה נמחקה לצמיתות${r?.mediaDeleted ? ` (${r.mediaDeleted} חלקי תמונה)` : ''}`); }
+      catch (e) { console.error(e); toast(e.code === 'partial-delete' || e.code === 'suggestion-approved' ? e.message : 'המחיקה נכשלה: ' + (e.code || e.message)); try { S.suggestions = await store.loadSuggestions(); } catch {} }
+      render(); return true;
+    }
     if (act === 'reject') { const s = S.suggestions.find(x => x.id === arg); s.status = 'rejected'; await store.saveSuggestion(s); render(); return true; }
     if (act === 'editsg') {
       const s = S.suggestions.find(x => x.id === arg); const q = s.draftUid ? S.questions.find(x => x.uid === s.draftUid) : await approve(arg, { publish: false });
@@ -240,8 +277,7 @@ export function createAdmin(ctx) {
     const f = t.dataset.admf;
     if (f === 'pubimport') { A.publishOnImport = t.value === '1'; return true; }
     if (f in A.f && f !== 'text') { A.f[f] = f === 'status' ? (t.value || 'all') : t.value; if (f === 'year') A.f.session = ''; A.limit = 200; render(); return true; }
-    if (f === 'bdomain') { A.bulk.domain = t.value; render(); return true; }
-    if (f === 'btype') { A.bulk.type = t.value; render(); return true; }
+    if (t.dataset.admb) { const k = t.dataset.admb; A.bulk[k] = t.type === 'checkbox' ? t.checked : t.value; A.bulkOpen = true; render(); return true; }
     if (t.dataset.admd) { const k = t.dataset.admd; A.draft[k] = k === 'points' ? (t.value === '' ? null : Number(t.value)) : t.value; return true; }
     if (t.dataset.admadd) { const k = t.dataset.admadd; const set = new Set(A.draft.addDomainIds); t.checked ? set.add(k) : set.delete(k); A.draft.addDomainIds = [...set]; return true; }
     if (t.dataset.admtax) {

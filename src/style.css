@@ -8,7 +8,7 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline:2px so
 .hint { color:var(--muted); font-size:13px; }
 
 /* כותרת עליונה */
-header.top { display:flex; align-items:center; gap:14px; background:#fff; border-bottom:1px solid var(--line); padding:8px 20px; position:sticky; top:0; z-index:10; box-shadow:0 1px 0 rgba(15,23,42,.03); }
+header.top { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; background:#fff; border-bottom:1px solid var(--line); padding:8px 20px; position:sticky; top:0; z-index:10; box-shadow:0 1px 0 rgba(15,23,42,.03); }
 header.top h1 { font-size:18px; margin:0; font-weight:700; white-space:nowrap; }
 header.top h1 small { font-weight:400; color:var(--muted); font-size:13px; margin-inline-start:6px; }
 nav.tabs { display:flex; gap:2px; }

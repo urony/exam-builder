@@ -69,7 +69,7 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
   const privChunk = id => id[1] === 'h';
   const colOf = id => (privChunk(id) ? 'bankPrivate' : 'bank');
   // שדות ניהול פנימיים: לא נכתבים לעותק הציבורי של שאלה. נשמרים ב-bankPrivate/adm (מנהל בלבד) וממוזגים בקריאה של מנהל.
-  const ADM_FIELDS = ['reviewFlag', 'conflictNote', 'adminEdited', 'fromSuggestion', 'approvedAt', 'author', 'authorAdmin', 'submitterUid', 'submitterName'];
+  const ADM_FIELDS = ['reviewFlag', 'conflictNote', 'adminEdited', 'fromSuggestion', 'approvedAt', 'author', 'authorAdmin', 'submitterUid', 'submitterName', 'sourceHistory'];
   const pubView = it => { const o = { ...it }; for (const f of ADM_FIELDS) delete o[f]; return o; };
   const dirty = new Set();                                  // חבילות ששונו ממתינות לכתיבה
   const mkSt = (meta, q, c, privMedia = []) => {
@@ -417,6 +417,23 @@ export function createCloudStore({ drive, firestore, uid, isAdmin = false, local
       needAdmin(); const { fs, db } = await firestore();
       await fs.setDoc(fs.doc(db, 'suggestions', s.id), toSuggestionDoc(s));
       await audit('suggestion-' + s.status, s.id, s.draftUid || '');
+    },
+    // מנהל: מחיקה לצמיתות של הצעה ממתינה/שנדחתה + כל חלקי המדיה שלה (sgId זהה בלבד). שאלה שפורסמה במאגר לא נוגעים בה.
+    // סדר: קודם המדיה, ורק אם הכול נמחק – ההצעה עצמה. כישלון חלקי: ההצעה נשארת ברשימה ואפשר לנסות שוב (בלי הצלחה כוזבת).
+    async deleteSuggestion(s) {
+      needAdmin();
+      if (s.status === 'approved' || s.status === 'in-review' || s.draftUid) throw tmpl('suggestion-approved', 'הצעה שאושרה אינה נמחקת מכאן. השאלה שפורסמה במאגר המרכזי נשארת כפי שהיא.');
+      const { fs, db } = await firestore();
+      const snap = await fs.getDocs(fs.query(fs.collection(db, 'suggestionMedia'), fs.where('sgId', '==', s.id)));
+      let deleted = 0; const failed = [];
+      for (const d of snap.docs) { try { await fs.deleteDoc(d.ref); deleted++; } catch (e) { failed.push(d.id + ':' + (e.code || e.message)); } }
+      if (failed.length) {
+        await audit('delete-suggestion-partial', s.id, `media ${deleted}/${snap.docs.length}`);
+        throw tmpl('partial-delete', `המחיקה לא הושלמה: נמחקו ${deleted} מתוך ${snap.docs.length} חלקי תמונה. ההצעה עדיין קיימת, אפשר לנסות שוב.`, { remaining: failed });
+      }
+      await fs.deleteDoc(fs.doc(db, 'suggestions', s.id));
+      await audit('delete-suggestion', s.id, `media ${deleted}; status ${s.status}`);
+      return { mediaDeleted: deleted };
     },
     // מנהל: טוען את תמונות ההצעה (נשלחו על ידי המורה) -> Map<key, bytes>
     async getSuggestionMedia(s) {

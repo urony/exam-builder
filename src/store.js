@@ -38,6 +38,7 @@ export const localStore = {
   saveBankQuestion: q => db.put('questions', JSON.parse(JSON.stringify(q))),
   deleteBankQuestion: uid => db.del('questions', uid),
   saveSuggestion: s => db.put('suggestions', JSON.parse(JSON.stringify(s))),
+  deleteSuggestion: s => db.del('suggestions', s.id),
   async loadTaxonomy() { return (await db.getOne('meta', 'taxonomy'))?.value || { domains: {}, types: {} }; },
   saveTaxonomy: value => db.put('meta', { key: 'taxonomy', value }),
   replaceCentral: data => db.replaceCentral(data),

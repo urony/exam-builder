@@ -1,3 +1,4 @@
+import { planBulk, runBulk } from '../src/admin-bulk.js';
 // בדיקת אינטגרציה: הקוד האמיתי של cloud-store מול אמולטור Firestore עם כללי האבטחה האמיתיים.
 // זהויות: מורה א׳, מורה ב׳, מנהל (admins/{uid}), ומורה שמזייף דגל isAdmin בלקוח (הכללים חייבים לחסום אותו).
 // נתונים סינתטיים בלבד. בלי אמולטור (FIRESTORE_EMULATOR_HOST) הבדיקה מדלגת ומדווחת זאת.
@@ -183,6 +184,83 @@ t(restored.questions.find(q => q.uid === 'synthetic-pkg:q1')?.reviewFlag === tru
 t(!(await B.loadBank()).questions.some(q => q.uid === 'synthetic-pkg:q3') && restored.questions.some(q => q.uid === 'synthetic-pkg:q3' && q.published === false), 'שחזור שומר הסתרה: מורה לא רואה, מנהל רואה');
 await rejectsCode(FORGED.replaceCentral({ packages: [], questions: [], cases: [], media: new Map() }), 'permission-denied');
 t((await ADMIN.loadBank()).questions.length === snapshot.questions.length, 'ניסיון replace ע״י מורה לא מחק דבר');
+
+// 5ב. מחיקה לצמיתות של הצעות (עם תמונות), הרשאות, כישלון חלקי, ויומן ביקורת
+{
+  const mkSg = (uid2, title, keys) => ({ uid: uid2, kind: 'personal', domainId: 'cardiology', typeId: 'open', title, blocks: [{ type: 'text', text: title }, ...keys.map(k => ({ type: 'image', mediaKey: k }))], rubric: null });
+  const big = Uint8Array.from({ length: 1_700_000 }, (_, i) => (i * 7 + 3) & 255), small = Uint8Array.from({ length: 5000 }, (_, i) => (i + 9) & 255);
+  const mediaCount = async sg => (await ffs.getDocs(ffs.query(ffs.collection(adb, 'suggestionMedia'), ffs.where('sgId', '==', sg)))).docs.length;
+  const getM = k => (k === 'user/big' ? big : k === 'user/small' ? small : null);
+  await B.submitSuggestion(mkSg('del-1', 'הצעה למחיקה א', ['user/big', 'user/small']), { getMedia: getM });
+  await B.submitSuggestion(mkSg('del-2', 'הצעה למחיקה ב', ['user/small']), { getMedia: getM });
+  await A.submitSuggestion(mkSg('keep-1', 'הצעה שנשארת', ['user/small']), { getMedia: getM });
+  const sgs = await ADMIN.loadSuggestions(); const d1 = sgs.find(x => x.id === 'sg-del-1'), d2 = sgs.find(x => x.id === 'sg-del-2'), keep = sgs.find(x => x.id === 'sg-keep-1');
+  const m1 = await mediaCount('sg-del-1'); const mKeep = await mediaCount('sg-keep-1');
+  t(m1 >= 3 && mKeep === 1, 'הצעה עם תמונות: חלקי מדיה נקלטו (' + m1 + ')');
+  t((await ADMIN.getSuggestionMedia(d1)).get('user/big').length === 1_700_000, 'מנהל רואה את תמונת ההצעה לפני מחיקה');
+  await rejectsCode(B.deleteSuggestion(d1), 'not-admin');
+  await rejectsCode(A.deleteSuggestion(d1), 'not-admin');
+  for (const who of ['teacherB', 'teacherA', 'FORGED']) {
+    const { fs: xf, db: xd } = fsFor(who);
+    await rejectsCode(xf.deleteDoc(xf.doc(xd, 'suggestions', 'sg-del-1')), 'permission-denied');
+    const part = (await ffs.getDocs(ffs.query(ffs.collection(adb, 'suggestionMedia'), ffs.where('sgId', '==', 'sg-del-1')))).docs[0];
+    await rejectsCode(xf.deleteDoc(xf.doc(xd, 'suggestionMedia', part.id)), 'permission-denied');
+  }
+  t(await mediaCount('sg-del-1') === m1 && (await ADMIN.loadSuggestions()).some(x => x.id === 'sg-del-1'), 'ניסיונות מחיקה ללא הרשאת מנהל לא שינו דבר');
+  await ADMIN.saveSuggestion({ ...d1, status: 'rejected' });
+  const flakyAdmin = mk('ADMIN', { isAdmin: true, wrap: real => ({ ...real, deleteDoc: async ref => { if (ref.path.startsWith('suggestionMedia/') && ref.id.endsWith('-1')) throw Object.assign(new Error('boom'), { code: 'unavailable' }); return real.deleteDoc(ref); } }) });
+  await rejectsCode(flakyAdmin.deleteSuggestion({ ...d1, status: 'rejected' }), 'partial-delete');
+  const left = await mediaCount('sg-del-1');
+  t((await ADMIN.loadSuggestions()).some(x => x.id === 'sg-del-1') && left >= 1 && left < m1, 'כישלון חלקי: ההצעה נשארה (ניתנת לניסיון חוזר), נשארה שארית מדיה, לא הוצגה הצלחה (' + left + ')');
+  t(await mediaCount('sg-keep-1') === 1 && (await ADMIN.loadSuggestions()).some(x => x.id === 'sg-keep-1'), 'כישלון חלקי לא פגע בהצעה אחרת');
+  const au1 = (await ffs.getDocs(ffs.collection(adb, 'audit'))).docs.map(d => d.data());
+  t(au1.some(x => x.action === 'delete-suggestion-partial' && x.target === 'sg-del-1') && !au1.some(x => x.action === 'delete-suggestion' && x.target === 'sg-del-1'), 'יומן: כישלון חלקי נרשם, מחיקה מלאה עדיין לא');
+  const rr = await ADMIN.deleteSuggestion({ ...d1, status: 'rejected' });
+  t(rr.mediaDeleted === left && await mediaCount('sg-del-1') === 0 && !(await ADMIN.loadSuggestions()).some(x => x.id === 'sg-del-1'), 'ניסיון חוזר השלים את המחיקה ללא שאריות');
+  t(!(await B.loadSuggestions()).some(x => x.id === 'sg-del-1') && (await B.loadSuggestions()).some(x => x.id === 'sg-del-2'), 'המורה כבר לא רואה את ההצעה שנמחקה, ורואה את האחרות');
+  await ADMIN.deleteSuggestion(d2);
+  t(await mediaCount('sg-del-2') === 0 && !(await B.loadSuggestions()).some(x => x.id === 'sg-del-2'), 'הצעה ממתינה נמחקה עם המדיה');
+  const au2 = (await ffs.getDocs(ffs.collection(adb, 'audit'))).docs.map(d => d.data());
+  t(['sg-del-1', 'sg-del-2'].every(id => au2.some(x => x.action === 'delete-suggestion' && x.target === id && x.by === 'ADMIN')), 'יומן ביקורת: מחיקות הצעות');
+  t((await ADMIN.getSuggestionMedia(keep)).get('user/small')?.length === 5000, 'מדיה של הצעה אחרת שלמה');
+  const appr = (await ADMIN.loadSuggestions()).find(x => x.status === 'approved');
+  await rejectsCode(ADMIN.deleteSuggestion(appr), 'suggestion-approved');
+  t((await B.loadBank()).questions.some(q => q.uid === 'approved-' + appr.id) && (await ADMIN.loadSuggestions()).some(x => x.id === appr.id), 'הצעה שאושרה לא נמחקה והשאלה שפורסמה נשארה');
+  await ADMIN.deleteSuggestion(keep);
+}
+
+// 5ג. עריכה קבוצתית של פרטי מקור: נשמרת בענן, היסטוריה למנהל בלבד, תוכן ללא שינוי, כישלון חלקי
+{
+  const bank0 = await ADMIN.loadBank(); const ids = ['synthetic-pkg:q1', 'synthetic-pkg:q6', 'synthetic-pkg:q7'];
+  const before = Object.fromEntries(ids.map(i => [i, JSON.parse(JSON.stringify(bank0.questions.find(q => q.uid === i)))]));
+  const sel0 = ids.map(i => bank0.questions.find(q => q.uid === i));
+  t(planBulk(sel0, { year: 2018 }).updates.length === 0 && planBulk(sel0, { year: 2018 }).skipped.length === 3, 'שאלות מורים לא משויכות לשנת בגרות בעריכה קבוצתית');
+  const sel = sel0.map(q => ({ ...q, kind: 'bagrut' }));
+  const plan = planBulk(sel, { year: 2018, session: 'מועד בדיקה' });
+  t(plan.updates.length === 3, 'עריכה קבוצתית: 3 שאלות בגרות סינתטיות מתוכננות (' + plan.updates.length + ')');
+  const r = await runBulk(plan, q => ADMIN.saveBankQuestion(q), '2026-11-06T00:00:00Z');
+  t(r.ok.length === 3 && r.failed.length === 0, 'עריכה קבוצתית נשמרה בענן');
+  const re = await mk('ADMIN', { isAdmin: true }).loadBank();
+  for (const i of ids) {
+    const q = re.questions.find(x => x.uid === i), b = before[i];
+    t(q.year === 2018 && q.session === 'מועד בדיקה', 'שנה/מועד עודכנו אחרי טעינה מחדש: ' + i);
+    t(q.sourceHistory.length === 2 && q.sourceHistory.find(h => h.field === 'year').from === (b.year ?? null), 'ערך קודם נשמר בהיסטוריה: ' + i);
+    t(JSON.stringify([q.blocks, q.rubric, q.caseStudyId, q.domainId, q.typeId, q.pkgId, q.points]) === JSON.stringify([b.blocks, b.rubric, b.caseStudyId, b.domainId, b.typeId, b.pkgId, b.points]), 'תוכן, מחוון, טבלאות, תמונות, סיפור מקרה ומזהים ללא שינוי: ' + i);
+  }
+  const tq = (await A.loadBank()).questions.find(q => q.uid === 'synthetic-pkg:q1');
+  t(tq.year === 2018 && tq.sourceHistory === undefined, 'מורה רואה שנה חדשה אך לא היסטוריית ניהול');
+  t(!(await rawTeacherEarly(['bank', 'bankPrivate'])).join('|').includes('sourceHistory'), 'קריאה ישירה של מורה: אין sourceHistory');
+  t((await A.getMedia('synthetic-pkg/q1.png')).length === 1_600_000 && re.cases.length >= 1, 'איור וסיפור מקרה שלמים אחרי עריכה קבוצתית');
+  let calls = 0;
+  const failing = mk('ADMIN', { isAdmin: true, wrap: real => ({ ...real, writeBatch: dbx => { const b = real.writeBatch(dbx); return new Proxy(b, { get: (tg, p) => (p === 'commit' ? async () => { calls++; if (calls >= 2) throw Object.assign(new Error('x'), { code: 'unavailable' }); return tg.commit(); } : (typeof tg[p] === 'function' ? tg[p].bind(tg) : tg[p])) }); } }) });
+  const cur = await failing.loadBank(); const sel2 = ids.map(i => cur.questions.find(q => q.uid === i));
+  const r2 = await runBulk(planBulk(sel2, { year: 2020 }), q => failing.saveBankQuestion(q));
+  const reload = await mk('ADMIN', { isAdmin: true }).loadBank();
+  const yrs = ids.map(i => reload.questions.find(q => q.uid === i).year);
+  t(r2.ok.length >= 1 && r2.failed.length >= 1 && r2.ok.length + r2.failed.length === 3, 'כישלון חלקי מדווח: ' + r2.ok.length + ' הצליחו, ' + r2.failed.length + ' נכשלו');
+  t(yrs.filter(y => y === 2020).length === r2.ok.length && yrs.filter(y => y === 2018).length === r2.failed.length, 'בענן שונו בדיוק השאלות שדווחו כמצליחות: ' + yrs.join(','));
+  await rejectsCode(FORGED.saveBankQuestion({ ...cur.questions[0], year: 1999 }), 'permission-denied');
+}
 
 // 6. תקלות רשת/הרשאה בקריאה: חוזרים למאגר המקומי ומדווחים (לא מוסתר)
 const flaky = mk('teacherA', { wrap: real => ({ ...real, getDocs: async () => { throw Object.assign(new Error('offline'), { code: 'unavailable' }); } }) });

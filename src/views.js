@@ -36,11 +36,15 @@ export function homeHtml(S, { showAdmin, cloud }) {
 
 export function examsHtml(S) {
   if (!S.exams.length) return `<section class="card empty"><p>עדיין אין מבחנים שמורים.</p><button class="btn primary" data-home="new">בניית מבחן חדש</button></section>`;
-  return `<section aria-labelledby="exlist"><div class="pagehead"><h2 id="exlist">המבחנים שלי</h2><span class="spacer"></span><button class="btn primary" data-home="new">+ מבחן חדש</button></div>
-    <div class="exgrid">${S.exams.map(e => `<article class="card excard ${e.id === S.exam?.id ? 'cur' : ''}">
+  const list = [...S.exams].sort(S.exSort === 'name' ? (a, b) => (a.title || '').localeCompare(b.title || '', 'he') : (a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  return `<section aria-labelledby="exlist"><div class="pagehead"><h2 id="exlist">המבחנים שלי</h2><span class="spacer"></span>
+    <label class="sortlbl">מיון <select id="exsort" aria-label="מיון המבחנים"><option value="updated" ${S.exSort !== 'name' ? 'selected' : ''}>עודכן לאחרונה</option><option value="name" ${S.exSort === 'name' ? 'selected' : ''}>לפי שם</option></select></label>
+    <button class="btn primary" data-home="new">+ מבחן חדש</button></div>
+    <p class="hint">לחיצה על כרטיס פותחת את המבחן.</p>
+    <div class="exgrid">${list.map(e => `<article class="card excard ${e.id === S.exam?.id ? 'cur' : ''}" data-openexam="${esc(e.id)}">
       <h3>${esc(e.title || 'מבחן ללא שם')}</h3>
       <div class="exmeta">${questionsOf(e).length} שאלות · ${totalPoints(e)} נקודות${e.school ? ' · ' + esc(e.school) : ''}</div>
       <div class="exmeta">עודכן ${esc(fmtDate(e.updatedAt))}</div>
-      <div class="exbtns"><button class="btn primary sm" data-openexam="${esc(e.id)}">פתיחה</button><button class="btn sm" data-dupex="${esc(e.id)}">שכפול</button><button class="btn sm danger" data-delex="${esc(e.id)}">מחיקה</button></div>
+      <div class="exbtns"><button class="btn primary sm" data-openexam="${esc(e.id)}">פתיחה</button><button class="btn sm" data-renex="${esc(e.id)}">שינוי שם</button><button class="btn sm" data-dupex="${esc(e.id)}">שכפול</button><button class="btn sm danger" data-delex="${esc(e.id)}">מחיקה</button></div>
     </article>`).join('')}</div></section>`;
 }

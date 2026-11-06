@@ -17,6 +17,7 @@ import { emptyUsage, savedUids, usedSource, isUsed, setManual, reconcile } from 
 import { LIMITS, ADMIN_CONTACT, QUOTA_NOTE, QUOTA_MORE, quotaUsage, checkQuota } from './quota.js';
 import { groupRows, caseMembers, addUnique } from './case-groups.js';
 import { homeHtml, examsHtml } from './views.js';
+import { helpBtn, helpLink, initHelp, closeHelp, GUIDE_URL } from './help.js';
 
 const ANATOMY_TOOL_URL = 'https://urony.github.io/Anatomic-Pictures-Finder-tool/';
 const clone = o => JSON.parse(JSON.stringify(o));
@@ -33,16 +34,17 @@ const S = {
   sel: null, checked: new Set(), caseOpen: new Set(),
   exam: null, exams: [], editing: new Set(), collapsed: new Set(),
   importReports: [], personal: [], suggestions: [], pq: null,
-  usage: emptyUsage(), saveState: null,
+  usage: emptyUsage(), saveState: null, exSort: localStorage.getItem('exSort') || 'updated',
+  fopen: new Set(JSON.parse(localStorage.getItem('fopen') || '["domains"]')),
   user: null, // { uid, name } אחרי התחברות Google; null = מצב מקומי
   isAdmin: false, warn: '', sync: null, mediaMissing: new Set(),
 };
 const $app = document.getElementById('app');
 // הודעה קצרה; עם action מוצג כפתור פעולה (למשל "עבור למבחן")
-function toast(msg, action) {
+function toast(msg, action, ms) {
   const t = document.getElementById('toast'); t.textContent = msg; t.classList.toggle('act', !!action);
   if (action) { const b = document.createElement('button'); b.type = 'button'; b.className = 'toastbtn'; b.textContent = action.label; b.addEventListener('click', () => { t.classList.remove('on'); action.fn(); }); t.append(' ', b); }
-  t.classList.add('on'); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('on'), action ? 6000 : 3200);
+  t.classList.add('on'); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('on'), ms || (action ? 6000 : 3200));
 }
 // חלון אישור/קלט מעוצב (במקום confirm/prompt של הדפדפן). מחזיר true/false, או מחרוזת כשיש input, או null בביטול.
 function ask({ title, text = '', ok = 'אישור', cancel = 'ביטול', danger = false, input = null }) {
@@ -321,6 +323,7 @@ const badgesOf = q => [
 // ---------- מסכים ----------
 const TABS = [['home', 'דף הבית'], ['work', 'בניית מבחן'], ['exams', 'המבחנים שלי'], ['personal', 'המאגר האישי']];
 function render() {
+  closeHelp();
   const showAdmin = S.isAdmin || (import.meta.env.DEV && !S.user);   // בגרסת הייצור אין ממשק ניהול מקומי למורים
   if (S.tab === 'admin' && !showAdmin) S.tab = 'home';
   const keep = new Map(); $app.querySelectorAll('[data-keep]').forEach(el => keep.set(el.dataset.keep, el.scrollTop));
@@ -333,6 +336,7 @@ function render() {
     <h1><button class="brand" data-tab="home" aria-label="בונה מבחנים במדעי הבריאות – לדף הבית">בונה מבחנים <small>מדעי הבריאות</small></button></h1>
     <nav class="tabs" aria-label="ניווט ראשי">${tabs.map(([k, t]) => `<button data-tab="${k}" class="${S.tab === k ? 'on' : ''}" ${S.tab === k ? 'aria-current="page"' : ''}>${t}</button>`).join('')}</nav>
     <span class="spacer"></span>
+    <a class="btn sm helpnav" href="${GUIDE_URL}" target="_blank" rel="noopener" title="מדריך שימוש למורים (נפתח בלשונית חדשה)">${ICON.help.replace('width="24" height="24"', 'width="16" height="16"')} עזרה / איך משתמשים?</a>
     ${cloudConfigured() ? (S.user ? `<span class="pill user">${esc(S.user.name || 'מחובר')}</span><button class="btn sm" id="signout">התנתק</button>` : '<button class="btn sm primary" id="signin">התחברות עם Google</button>') : ''}
   </header>
   ${syncBarHtml()}
@@ -342,7 +346,7 @@ function render() {
   ${S.modal && qByUid(S.modal) ? `<div class="modal" data-closemodal><div class="modalbox card" role="dialog" aria-modal="true" aria-label="פרטי שאלה"><button class="btn sm" data-closemodal style="float:inline-end">סגור ✕</button>${detailHtml(qByUid(S.modal))}</div></div>` : ''}`;
   $app.querySelectorAll('[data-keep]').forEach(el => { const v = keep.get(el.dataset.keep); if (v) el.scrollTop = v; });
   if (sameTab) window.scrollTo(0, wy); else window.scrollTo(0, 0);
-  requestAnimationFrame(() => { measurePaper(); measureLayout(); });
+  requestAnimationFrame(() => { measurePaper(); measureLayout(); updateTop(); });
 }
 // גובה אזור העבודה: הפאנלים במצב משולב מותאמים לגובה המסך (גלילה אחת לכל פאנל)
 function measureLayout() { const m = document.querySelector('.split, .bank, .examwrap') || document.getElementById('main'); if (m) document.documentElement.style.setProperty('--maintop', Math.round(m.getBoundingClientRect().top + window.scrollY) + 'px'); }
@@ -367,7 +371,7 @@ const examCounts = () => { const m = new Map(); for (const i of S.exam.items) { 
 const titleOf = q => { const t = q.title || q.blocks.find(b => b.text)?.text || '(ללא כותרת)'; return t.length > 130 ? t.slice(0, 130) + '…' : t; };
 function useSeg() {
   const opts = [['all', 'כל השאלות'], ['unused', 'לא השתמשתי'], ['used', 'כבר השתמשתי']];
-  return `<div class="seg sm useseg" role="group" aria-label="סינון לפי שימוש קודם">${opts.map(([k, t]) => `<button data-use="${k}" class="${S.f.use === k ? 'on' : ''}" aria-pressed="${S.f.use === k}">${t}</button>`).join('')}</div>`;
+  return `<div class="useline"><div class="seg sm useseg" role="group" aria-label="סינון לפי שימוש קודם">${opts.map(([k, t]) => `<button data-use="${k}" class="${S.f.use === k ? 'on' : ''}" aria-pressed="${S.f.use === k}">${t}</button>`).join('')}</div>${helpBtn('used')}</div>`;
 }
 function stateBadges(q, ec) {
   const u = usedBy(q), inEx = ec.get(q.uid) || 0;
@@ -392,7 +396,7 @@ function caseGroupHtml(g, ec) {
   const full = inEx === all.length;
   return `<div class="cgroup ${open ? 'open' : ''}" data-cg="${esc(g.cid)}">
     <div class="cghead"><button class="btn sm tog" data-cgtoggle="${esc(g.cid)}" aria-expanded="${open}" aria-label="${open ? 'סגירת' : 'פתיחת'} שאלות סיפור המקרה">${open ? '▼' : '◀'}</button>
-      <div class="grow"><div class="cgt"><span class="badge casebadge">סיפור מקרה</span> <span dir="auto">${esc(txt.slice(0, 120))}${txt.length > 120 ? '…' : ''}</span></div>
+      <div class="grow"><div class="cgt"><span class="badge casebadge">סיפור מקרה</span>${helpBtn('case')} <span dir="auto">${esc(txt.slice(0, 120))}${txt.length > 120 ? '…' : ''}</span></div>
         <div class="s">${all.length} שאלות במקרה${g.qs.length < all.length ? ` · ${g.qs.length} מתאימות לסינון` : ''}${inEx ? ` · ${inEx} כבר במבחן` : ''}</div></div>
       <button class="btn sm primary" data-cgadd="${esc(g.cid)}" ${full ? 'disabled' : ''}>${full ? 'כל המקרה במבחן ✓' : inEx ? `הוסף את ${all.length - inEx} הנותרות` : `הוסף את כל ${all.length} השאלות`}</button></div>
     ${open ? `<div class="cgbody"><div class="casebox">${blocksHtml(cs.blocks)}</div>${g.qs.map(q => qRow(q, ec, true)).join('')}</div>` : ''}</div>`;
@@ -402,12 +406,32 @@ function bankRows(list, cap) {
   for (const r of rows) { if (n >= cap) break; out += r.kind === 'q' ? qRow(r.q, ec) : caseGroupHtml(r, ec); n += r.kind === 'q' ? 1 : r.qs.length; }
   return (out || '<div class="empty">אין תוצאות. נסו לשנות את החיפוש או לאפס את המסננים.</div>') + (list.length > n ? `<div class="empty small">מוצגות ${n} מתוך ${list.length}. צמצמו את החיפוש כדי לראות את השאר.</div>` : '');
 }
-const filtersActive = () => Object.entries(S.f).filter(([k, v]) => (v instanceof Set && v.size) || (k === 'use' && v !== 'all')).length;
-const filterBlocks = (full) => `${filterGroup('נושא (תחום ראשי)', 'domains', uniq(vis().map(q => q.domainId)).map(d => [d, label('domains', d)]))}
-      ${filterGroup('סוג שאלה', 'types', uniq(vis().map(q => q.typeId)).map(t => [t, label('types', t)]))}
-      ${filterGroup('מקור השאלות', 'kinds', uniq(vis().map(q => q.kind)).map(k => [k, KIND_LABEL[k]]))}
-      ${filterGroup('שנת בחינה', 'years', uniq(vis().map(q => q.year)).sort((a, b) => b - a).map(y => [y, y]))}
-      ${full ? filterGroup('סמל שאלון', 'codes', uniq(vis().map(q => q.examCode)).map(c => [c, c])) : ''}`;
+const filtersActive = () => Object.entries(S.f).reduce((n, [k, v]) => n + (v instanceof Set ? v.size : k === 'use' && v !== 'all' ? 1 : 0), 0);
+// קבוצות מסננים מתקפלות. הבחירות (S.f) לעולם לא נמחקות בקיפול; מצב הפתיחה נשמר ב-localStorage
+const FGROUPS = [['domains', 'תחומי ידע'], ['types', 'סוגי שאלות'], ['kinds', 'מקור'], ['years', 'שנת בחינה'], ['codes', 'נוספים · סמל שאלון']];
+const fEntries = {
+  domains: () => uniq(vis().map(q => q.domainId)).map(d => [d, label('domains', d)]),
+  types: () => uniq(vis().map(q => q.typeId)).map(t => [t, label('types', t)]),
+  kinds: () => uniq(vis().map(q => q.kind)).map(k => [k, KIND_LABEL[k] || k]),
+  years: () => uniq(vis().map(q => q.year)).sort((a, b) => b - a).map(y => [y, y]),
+  codes: () => uniq(vis().map(q => q.examCode)).map(c => [c, c]),
+};
+function filterGroup(key, title) {
+  const ents = fEntries[key](); if (!ents.length) return '';
+  const n = S.f[key].size, open = S.fopen.has(key);
+  return `<div class="fgrp ${open ? 'open' : ''}"><button type="button" class="fghead" data-fg="${key}" aria-expanded="${open}" aria-controls="fg-${key}"><span class="chv" aria-hidden="true">${open ? '▾' : '◂'}</span><span>${title}${n ? ` · <b>${n} נבחרו</b>` : ''}</span></button>
+    <div class="fgbody" id="fg-${key}" ${open ? '' : 'hidden'}>${ents.map(([v, l]) => `<label><input type="checkbox" data-f="${key}" value="${esc(v)}" ${S.f[key].has(String(v)) ? 'checked' : ''}> ${esc(l)}</label>`).join('')}</div></div>`;
+}
+const filterBlocks = () => FGROUPS.map(([k, t]) => filterGroup(k, t)).join('');
+// פס מסננים פעילים: ברור למה התוצאות מצומצמות, והסרה בלחיצה (לא משנה את מנגנון הסינון)
+function chipsHtml() {
+  const c = [], f = S.f, nm = { domains: v => label('domains', v), types: v => label('types', v), kinds: v => KIND_LABEL[v] || v, years: v => v, codes: v => 'סמל ' + v };
+  if (f.text.trim()) c.push(['text', '', 'חיפוש: ' + f.text.trim().slice(0, 24)]);
+  for (const [k] of FGROUPS) for (const v of f[k]) c.push([k, v, nm[k](v)]);
+  if (f.use !== 'all') c.push(['use', '', f.use === 'used' ? 'כבר השתמשתי' : 'לא השתמשתי']);
+  if (!c.length) return '';
+  return `<div class="fchips" role="group" aria-label="מסננים פעילים">${c.map(([k, v, l]) => `<button type="button" class="fchip" data-unf="${k}" data-unv="${esc(v)}" aria-label="הסרת המסנן: ${esc(l)}">${esc(l)} <span aria-hidden="true">✕</span></button>`).join('')}<button type="button" class="linkbtn" id="reset">נקה הכול</button></div>`;
+}
 const sortSel = () => `<select id="sort" aria-label="מיון"><option value="year-desc" ${S.sort === 'year-desc' ? 'selected' : ''}>חדש לישן</option><option value="year-asc" ${S.sort === 'year-asc' ? 'selected' : ''}>ישן לחדש</option><option value="domain" ${S.sort === 'domain' ? 'selected' : ''}>לפי נושא</option></select>`;
 
 function bankCompact() {
@@ -416,7 +440,9 @@ function bankCompact() {
   return `<div class="bankhead">
     <input type="search" id="q" aria-label="חיפוש חופשי בטקסט" placeholder="חיפוש חופשי בטקסט…" value="${esc(S.f.text)}">
     ${useSeg()}
-    <details class="fdet"><summary>מסננים${fa ? ` (${fa} פעילים)` : ''}</summary><div class="filters">${filterBlocks(false)}<p><button class="btn sm" id="reset">איפוס מסננים</button></p></div></details>
+    <div class="fpanel"><button type="button" class="fghead top" data-fg="_panel" aria-expanded="${S.fopen.has('_panel')}" aria-controls="fg-_panel"><span class="chv" aria-hidden="true">${S.fopen.has('_panel') ? '▾' : '◂'}</span><span>מסננים${fa ? ` · <b>${fa} פעילים</b>` : ''}</span></button>
+      <div class="filters" id="fg-_panel" ${S.fopen.has('_panel') ? '' : 'hidden'}>${filterBlocks()}</div></div>
+    ${chipsHtml()}
     <div class="listhead"><b>${list.length} שאלות</b>${sortSel()}<span class="spacer"></span><button class="btn sm" id="selall">בחר הכול</button>
       <button class="btn primary sm" id="addchecked" ${S.checked.size ? '' : 'disabled'}>הוסף ${S.checked.size || ''} נבחרות</button></div></div>
     <div class="clist">${bankRows(list, 300)}</div>`;
@@ -428,8 +454,8 @@ function examPanel(compact) {
   if (!compact && S.pv === 'edit' && !S._pvTouched) S.pv = 'both';
   const saveText = { saving: 'שומר…', saved: 'נשמר ✓', local: 'נשמר במחשב בלבד – ממתין לענן', failed: 'השמירה נכשלה' }[S.saveState] || '';
   const bar = `<div class="pvbar"><div class="seg sm" role="group" aria-label="תצוגת המבחן">${pvModes.map(([k, t]) => `<button data-pv="${k}" class="${S.pv === k ? 'on' : ''}" aria-pressed="${S.pv === k}">${t}</button>`).join('')}</div>
-    ${S.pv !== 'edit' ? `<label class="chk"><input type="checkbox" data-pvt ${S.pvTeacher ? 'checked' : ''}> גרסת מורה (עם תשובות)</label>` : ''}
-    <span class="spacer"></span><span id="saveind" class="badge savebadge ${S.saveState || ''}" role="status">${saveText}</span></div>`;
+    ${S.pv !== 'edit' ? `<label class="chk"><input type="checkbox" data-pvt ${S.pvTeacher ? 'checked' : ''}> גרסת מורה (עם תשובות)</label>${helpBtn('teacher')}` : ''}
+    <span class="spacer"></span><span id="saveind" class="badge savebadge ${S.saveState || ''}" role="status">${saveText}</span>${helpBtn('cloud')}</div>`;
   if (S.pv === 'preview') return bar + paper();
   if (S.pv === 'both' && !compact) return bar + `<div class="two"><div>${editHtml(false)}</div><div data-keep="paper">${paper()}</div></div>`;
   return bar + editHtml(compact);
@@ -477,10 +503,6 @@ function paper() {
   return h + '</div></div>';
 }
 
-function filterGroup(title, key, entries) {
-  if (!entries.length) return '';
-  return `<h3>${title}</h3>` + entries.map(([v, l]) => `<label><input type="checkbox" data-f="${key}" value="${esc(v)}" ${S.f[key].has(String(v)) ? 'checked' : ''}> ${esc(l)}</label>`).join('');
-}
 function bankView() {
   if (!S.questions.length) return `<div class="card empty">המאגר ריק. עברו ללשונית "ייבוא חבילות" וטענו קובצי ZIP.</div>`;
   const list = filtered();
@@ -489,12 +511,8 @@ function bankView() {
     <aside class="card filters">
       <input type="search" id="q" aria-label="חיפוש חופשי בטקסט" placeholder="חיפוש חופשי בטקסט…" value="${esc(S.f.text)}">
       ${useSeg()}
-      ${filterGroup('נושא (תחום ראשי)', 'domains', uniq(vis().map(q => q.domainId)).map(d => [d, label('domains', d)]))}
-      ${filterGroup('סוג שאלה', 'types', uniq(vis().map(q => q.typeId)).map(t => [t, label('types', t)]))}
-      ${filterGroup('מקור השאלות', 'kinds', uniq(vis().map(q => q.kind)).map(k => [k, KIND_LABEL[k]]))}
-      ${filterGroup('שנת בחינה', 'years', uniq(vis().map(q => q.year)).sort((a, b) => b - a).map(y => [y, y]))}
-      ${filterGroup('סמל שאלון', 'codes', uniq(vis().map(q => q.examCode)).map(c => [c, c]))}
-      <p><button class="btn sm" id="reset">איפוס מסננים</button></p>
+      ${chipsHtml()}
+      ${filterBlocks()}
     </aside>
     <section class="card list" data-keep="list">
       <div class="listhead">
@@ -596,25 +614,38 @@ function freeHtml(it, i) {
     <button class="btn sm" data-mv="up:${it.id}" ${i === 0 ? 'disabled' : ''}>▲</button><button class="btn sm" data-mv="down:${it.id}" ${i === n - 1 ? 'disabled' : ''}>▼</button><button class="btn sm danger" data-rm="${it.id}">מחק</button></div>
     <textarea data-freetext="${it.id}" placeholder="הוראות, הסבר או כל טקסט שיופיע במבחן בין השאלות">${esc(it.text)}</textarea></div>`;
 }
+const ic = (name, n = 16) => ICON[name].replace('width="24" height="24"', `width="${n}" height="${n}"`);
+const srcShort = q => q.kind === 'personal' ? 'שאלה אישית' : q.kind === 'draft' ? 'שאלה חדשה' : q.kind === 'bagrut' ? 'בגרות' + (q.year ? ' ' + q.year : '') : 'שאלה ממורה';
+const ibtn = (attrs, icon, lbl, cls = '') => `<button type="button" class="ibtn ${cls}" ${attrs} title="${lbl}" aria-label="${lbl}">${ic(icon)}</button>`;
+// "הוסף תמונה": תפריט אחד (תמונה מהמחשב / עמוד מ-PDF / כלי האיורים). kind: item | pq; id: מזהה פריט
+function addImageMenu(kind, id = '') {
+  const a = kind === 'item' ? { up: `data-upimg="${id}"`, pdf: `data-uppdf="${id}"` } : { up: 'data-pqimg', pdf: 'data-pqpdf' };
+  return `<span class="addimg"><button type="button" class="btn sm" data-imgmenu aria-haspopup="menu" aria-expanded="false">${ic('image')} הוסף תמונה <span aria-hidden="true">▾</span></button>
+    <div class="menu" role="menu" aria-label="הוספת תמונה" hidden>
+      <button type="button" role="menuitem" data-pick="up">${ic('image')} תמונה מהמחשב</button>
+      <button type="button" role="menuitem" data-pick="pdf" title="בחירת עמוד אחד מקובץ PDF (ההמרה במחשב שלך, בלי העלאה לשרת)">${ic('pdf')} עמוד מתוך PDF</button>
+      <a role="menuitem" class="mi" data-anatomy href="${ANATOMY_TOOL_URL}" target="_blank" rel="noopener">${ic('search')} כלי האיורים האנטומיים ↗</a></div>
+    <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" ${a.up} hidden tabindex="-1"><input type="file" accept="application/pdf,.pdf" ${a.pdf} hidden tabindex="-1"></span>`;
+}
 function itemHtml(it, i, first) {
   if (it.type === 'chapter') return chapterHtml(it, i);
   if (it.type === 'free') return freeHtml(it, i);
   const cid = first.get(it.id); const editing = S.editing.has(it.id);
-  const isMC = isChoiceQuestion(it.snap.blocks);
-  return `${cid ? `<div class="card casebox"><h4>סיפור מקרה – מוצג פעם אחת לפני שאלה ${qNumber(S.exam, it.id)} <label style="float:inline-end"><input type="checkbox" data-casein="${esc(cid)}" checked> כלול</label></h4>${editing ? '' : ''}${blocksHtml(S.exam.cases[cid].blocks)}</div>` : ''}
-  <div class="card item" data-id="${it.id}">
-    <div class="hd"><span class="drag" draggable="true" data-dragh="${it.id}" title="גרירה לשינוי סדר" aria-hidden="true">⠿</span><span class="num">שאלה ${qNumber(S.exam, it.id)}</span><span class="qsnip" dir="auto">${esc(snippet(it))}</span><span>${badgesOf({ ...it.snap, rubric: it.snap.rubric, title: '' , blocks: it.snap.blocks, caseStudyId: it.snap.caseStudyId, typeId: null })}</span>
-      <span class="ctrl">
-        <label>נק׳ <input type="number" min="0" data-pts="${it.id}" value="${it.points ?? ''}"></label>
-        ${isMC ? '' : `<label>שורות לתשובה <input type="number" min="0" max="20" data-lines="${it.id}" value="${it.answerLines}"></label>`}
-        <label><input type="checkbox" data-pb="${it.id}" ${it.pageBreak ? 'checked' : ''}> עמוד חדש</label>
-        <button class="btn sm" data-mv="up:${it.id}" ${i === 0 ? 'disabled' : ''} title="הזז למעלה" aria-label="הזזת השאלה למעלה">▲</button>
-        <button class="btn sm" data-mv="down:${it.id}" ${i === S.exam.items.length - 1 ? 'disabled' : ''} title="הזז למטה" aria-label="הזזת השאלה למטה">▼</button>
-        <button class="btn sm" data-chapbefore="${it.id}" title="הוספת כותרת פרק לפני השאלה הזאת">+ פרק כאן</button>
-        <button class="btn sm" data-edit="${it.id}">${editing ? 'סיום עריכה' : 'ערוך עותק'}</button>
-        ${it.snap.kind === 'draft' ? `<button class="btn sm" data-savepq="${it.id}">שמור במאגר האישי</button>` : ''}
-        <button class="btn sm danger" data-rm="${it.id}">מחק</button>
-      </span></div>
+  const isMC = isChoiceQuestion(it.snap.blocks), n = S.exam.items.length, sn = it.snap, dom = sn.domainId ? label('domains', sn.domainId) : '';
+  return `${cid ? `<div class="card casebox"><h4>סיפור מקרה – מוצג פעם אחת לפני שאלה ${qNumber(S.exam, it.id)} <label style="float:inline-end"><input type="checkbox" data-casein="${esc(cid)}" checked> כלול</label></h4>${blocksHtml(S.exam.cases[cid].blocks)}</div>` : ''}
+  <div class="card item cmp" data-id="${it.id}">
+    <div class="ih1"><span class="drag" draggable="true" data-dragh="${it.id}" title="גרירה לשינוי סדר" aria-hidden="true">${ic('grip', 18)}</span><span class="num">שאלה ${qNumber(S.exam, it.id)}</span>
+      <span class="mvs">${ibtn(`data-mv="up:${it.id}" ${i === 0 ? 'disabled' : ''}`, 'up', 'הזזת השאלה למעלה')}${ibtn(`data-mv="down:${it.id}" ${i === n - 1 ? 'disabled' : ''}`, 'down', 'הזזת השאלה למטה')}</span>
+      <span class="ibadges"><span class="badge src">${esc(srcShort(sn))}</span>${dom ? `<span class="badge">${esc(dom)}</span>` : ''}${sn.rubric ? '<span class="badge ok">מחוון</span>' : ''}</span></div>
+    <div class="ih2">
+      <label class="fld">נק׳ <input class="n3" type="number" min="0" max="999" inputmode="numeric" data-pts="${it.id}" value="${it.points ?? ''}" aria-label="ניקוד השאלה"></label>
+      ${isMC ? '' : `<label class="fld">שורות <input class="n2" type="number" min="0" max="20" inputmode="numeric" data-lines="${it.id}" value="${it.answerLines}" aria-label="מספר שורות לתשובה"></label>`}
+      <label class="chk"><input type="checkbox" data-pb="${it.id}" ${it.pageBreak ? 'checked' : ''}> עמוד חדש</label>
+      <button type="button" class="btn sm" data-chapbefore="${it.id}" title="הוספת כותרת פרק לפני השאלה הזאת">+ פרק כאן</button>
+      <button type="button" class="btn sm" data-edit="${it.id}">${editing ? 'סיום עריכה' : 'ערוך עותק'}</button>
+      ${addImageMenu('item', it.id)}
+      ${sn.kind === 'draft' ? `<button type="button" class="btn sm" data-savepq="${it.id}">שמור במאגר האישי</button>` : ''}
+      ${ibtn(`data-rm="${it.id}"`, 'trash', 'מחיקת השאלה מהמבחן', 'danger push')}</div>
     ${imagesPanelHtml(it)}
     ${it.edited ? '<div class="editnote">השאלה נערכה. מומלץ לבדוק אם יש צורך לעדכן את הניקוד</div>' : ''}
     ${editing ? editorHtml(it) : previewHtml(it)}
@@ -630,12 +661,8 @@ function previewHtml(it) {
   return side ? `${above}<div class="sidewrap">${body}<div class="sideimg">${side}</div></div>${below}` : `${above}${body}${below}`;
 }
 function imagesPanelHtml(it) {
-  const imgs = it.images || [];
+  const imgs = it.images || []; if (!imgs.length) return '';
   return `<div class="imgpanel">
-    <label class="btn sm">+ הוסף תמונה מהמחשב<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-upimg="${it.id}" hidden></label>
-    <label class="btn sm" title="בחירת עמוד אחד מקובץ PDF והוספתו כתמונה (ההמרה במחשב שלך, בלי העלאה לשרת)">${ICON.pdf.replace('width="24" height="24"', 'width="16" height="16"')} הוסף עמוד מקובץ PDF<input type="file" accept="application/pdf,.pdf" data-uppdf="${it.id}" hidden></label>
-    <a class="btn sm" href="${ANATOMY_TOOL_URL}" target="_blank" rel="noopener">פתח את כלי האיורים האנטומיים ↗</a>
-    <span class="hint">שמרו את האיור במחשב וחזרו להעלות אותו כאן</span>
     ${imgs.map(im => `<div class="uimg"><img src="${mediaUrl(im.key)}" alt="${esc(im.name)}">
       <div><div class="s">${esc(im.name)}</div>
       <label>רוחב (ס״מ) <input type="number" min="2" max="17" step="0.5" data-imgw="${it.id}:${im.id}" value="${im.widthCm}"></label>
@@ -659,7 +686,8 @@ function personalView() {
   if (S.pq) return pqForm();
   const qu = quotaUsage(S.suggestions);
   return `<div class="card"><div style="display:flex;gap:8px;align-items:center"><b>המאגר האישי שלי (${S.personal.length})</b><span class="spacer"></span><button class="btn primary" data-pqnew>+ שאלה חדשה</button></div>
-    <p class="hint" style="color:var(--muted)">שאלות אישיות גלויות רק לך. שאלה שתציע למאגר הכללי תופיע שם רק אחרי אישור המנהל.</p>
+    <p class="hint" style="color:var(--muted)">שאלות אישיות גלויות רק לך. שאלה שתציע למאגר הכללי תופיע שם רק אחרי אישור המנהל. ${helpBtn('suggest')}</p>
+    <div class="pnote" role="note"><span>השאלות שיצרת כאן זמינות גם בעת בניית מבחן. כדי למצוא אותן, עבור לחיפוש השאלות ובחר במקור ״המאגר האישי שלי״.</span> <button type="button" class="btn sm" data-pqsearch>חיפוש במאגר האישי שלי</button></div>
     ${S.user && !S.isAdmin ? `<p class="hint quotaline">הצעות שממתינות לבדיקה: <b>${qu.pending}</b> מתוך ${LIMITS.pending} · תמונות בהצעות ממתינות: <b>${qu.images}</b> מתוך ${LIMITS.imagesTotal} · עד ${LIMITS.imagesPerSuggestion} תמונות בהצעה, עד 2MB לתמונה.</p>` : ''}</div>
     ${S.personal.map(q => { const sg = sugOf(q.uid); return `<div class="card item"><div class="hd"><b>${esc(q.title || q.blocks.find(b => b.text)?.text.slice(0, 70) || '(ללא כותרת)')}</b><span>${badgesOf(q)}</span>
       <span class="ctrl">${sg ? `<span class="badge">${sg.status === 'pending' ? 'ממתינה לאישור' : sg.status === 'approved' ? 'אושרה' : 'נדחתה'}</span>` : `<label><input type="checkbox" data-sgcredit="${esc(q.uid)}"> הוסף קרדיט בשמי</label><button class="btn sm" data-suggest="${esc(q.uid)}">הצע למאגר הכללי</button>`}
@@ -667,24 +695,28 @@ function personalView() {
       <div class="qbody">${blocksHtml(q.blocks)}</div></div>`; }).join('') || '<div class="card empty">אין עדיין שאלות אישיות.</div>'}`;
 }
 function pqForm() {
-  const p = S.pq; const ta = (k, v, rows = 3) => `<textarea rows="${rows}" data-pq="${k}" style="width:100%">${esc(v)}</textarea>`;
-  const list = (k, arr) => arr.map((v, i) => `<div class="blkedit"><div><b>${LETTERS[i] || i + 1}.</b><textarea data-pql="${k}:${i}" rows="2">${esc(v)}</textarea></div><button class="btn sm danger" data-pqrm="${k}:${i}">✕</button></div>`).join('');
-  return `<div class="card item"><b>${p.uid ? 'עריכת שאלה אישית' : 'שאלה חדשה'}</b>
-    ${p.error ? `<div class="editnote">${esc(p.error)}</div>` : ''}
-    <div class="exam-meta" style="margin:10px 0">
-      <label>מקור (חובה)<select data-pq="sourceKind">${Object.entries(SOURCE_OPTIONS).map(([k, l]) => `<option value="${k}" ${p.sourceKind === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-      <label>פירוט מקור (אופציונלי)<input data-pq="sourceText" value="${esc(p.sourceText)}"></label>
-      <label>נושא ראשי (חובה)<select data-pq="domainId"><option value="">בחרו…</option>${Object.entries(S.tax.domains).map(([k, l]) => `<option value="${k}" ${p.domainId === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
-      <label>סוג שאלה (אופציונלי)<select data-pq="typeId"><option value="">—</option>${Object.entries(S.tax.types).map(([k, l]) => `<option value="${k}" ${p.typeId === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
-      <label>כותרת לחיפוש (אופציונלי)<input data-pq="title" value="${esc(p.title)}"></label></div>
-    <label class="exam-meta" style="display:block">גוף השאלה (חובה, אלא אם יש סעיפים/אפשרויות)${ta('body', p.body, 4)}</label>
-    <div class="imgpanel"><label class="btn sm">+ הוסף תמונה<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-pqimg hidden></label>
-      <a class="btn sm" href="${ANATOMY_TOOL_URL}" target="_blank" rel="noopener">כלי האיורים האנטומיים ↗</a>
-      ${p.images.map((im, i) => `<span class="uimg" style="width:auto"><img src="${mediaUrl(im.key)}" alt=""> <button class="btn sm danger" data-pqrm="images:${i}">הסר</button></span>`).join('')}</div>
-    <b>סעיפים</b>${list('sections', p.sections)}<button class="btn sm" data-pqadd="sections">+ סעיף</button>
-    <div style="margin-top:8px"><b>אפשרויות תשובה (רב־ברירה)</b></div>${list('choices', p.choices)}<button class="btn sm" data-pqadd="choices">+ אפשרות</button>
-    <label class="exam-meta" style="display:block;margin-top:10px">תשובה / מחוון (אופציונלי)${ta('answer', p.answer, 3)}</label>
-    <p><button class="btn primary" data-pqsave>שמור במאגר האישי</button> <button class="btn" data-pqcancel>ביטול</button></p></div>`;
+  const p = S.pq; const miss = p.error ? { src: !p.sourceKind, dom: !p.domainId, body: p.error === 'חסר תוכן לשאלה' } : {};
+  const req = '<span class="req" title="שדה חובה">חובה</span>';
+  const list = (k, arr) => arr.map((v, i) => `<div class="blkedit"><div><b>${LETTERS[i] || i + 1}.</b><textarea data-pql="${k}:${i}" rows="2" aria-label="${k === 'sections' ? 'סעיף' : 'אפשרות'} ${LETTERS[i] || i + 1}">${esc(v)}</textarea></div><button class="btn sm danger" data-pqrm="${k}:${i}" aria-label="הסרה">✕</button></div>`).join('');
+  return `<div class="card item pqform"><div class="pqhead"><b>${p.uid ? 'עריכת שאלה אישית' : 'שאלה חדשה'}</b></div>
+    ${p.error ? `<div class="editnote" role="alert">${esc(p.error)}</div>` : ''}
+    <div class="pqgrid">
+      <fieldset class="pqmeta"><legend>פרטי השאלה</legend>
+        <label class="${miss.src ? 'bad' : ''}">מקור ${req}<select data-pq="sourceKind">${Object.entries(SOURCE_OPTIONS).map(([k, l]) => `<option value="${k}" ${p.sourceKind === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        <label>פרטי מקור <small>(אופציונלי)</small><input data-pq="sourceText" value="${esc(p.sourceText)}"></label>
+        <label class="${miss.dom ? 'bad' : ''}">תחום עיקרי ${req}<select data-pq="domainId"><option value="">בחרו…</option>${Object.entries(S.tax.domains).map(([k, l]) => `<option value="${k}" ${p.domainId === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
+        <label>סוג שאלה <small>(אופציונלי)</small><select data-pq="typeId"><option value="">—</option>${Object.entries(S.tax.types).map(([k, l]) => `<option value="${k}" ${p.typeId === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
+        <label>כותרת לחיפוש <small>(אופציונלי)</small><input data-pq="title" value="${esc(p.title)}"></label>
+      </fieldset>
+      <div class="pqwrite">
+        <label class="${miss.body ? 'bad' : ''}"><span class="lbl">גוף השאלה ${req} <small>(אפשר להשאיר ריק אם יש סעיפים או אפשרויות)</small></span><textarea class="pqbody" rows="9" data-pq="body">${esc(p.body)}</textarea></label>
+        <div class="imgpanel">${addImageMenu('pq')}${p.images.map((im, i) => `<span class="uimg" style="width:auto"><img src="${mediaUrl(im.key)}" alt=""> <button class="btn sm danger" data-pqrm="images:${i}">הסר</button></span>`).join('')}</div>
+        <div class="pqsec"><b>סעיפים</b> <small>(אופציונלי)</small>${list('sections', p.sections)}<button class="btn sm" data-pqadd="sections">+ סעיף</button></div>
+        <div class="pqsec"><b>אפשרויות תשובה</b> <small>(לשאלת רב־ברירה)</small>${list('choices', p.choices)}<button class="btn sm" data-pqadd="choices">+ אפשרות</button></div>
+        <label class="pqans"><span class="lbl">תשובה / מחוון <small>(אופציונלי)</small></span><textarea rows="4" data-pq="answer">${esc(p.answer)}</textarea></label>
+      </div>
+    </div>
+    <p class="pqbtns"><button class="btn primary" data-pqsave>שמור במאגר האישי</button> <button class="btn" data-pqcancel>ביטול</button></p></div>`;
 }
 
 function importView() {
@@ -723,7 +755,7 @@ async function devLoad() {
 $app.addEventListener('click', async e => {
   if (e.target.tagName === 'IMG' && e.target.closest('.qbody, .rub, .casebox, .uimg')) { return openLightbox(e.target.src); }
   if (e.target.closest('[data-closemodal]') && (e.target.matches('.modal') || e.target.closest('button[data-closemodal]'))) { S.modal = null; return render(); }
-  const t = e.target.closest('button, .qrow'); if (!t) return;
+  const t = e.target.closest('button, .qrow, .excard'); if (!t) return;
   const d = t.dataset;
   if (e.target.closest('[data-admchk]')) return;
   if (d.adm !== undefined && await admin.click(t, d)) return;
@@ -736,6 +768,7 @@ $app.addEventListener('click', async e => {
   if (d.openexam) { await flushSaves(); const x = S.exams.find(v => v.id === d.openexam); if (x) { S.exam = clone(x); S.editing.clear(); S.saveState = null; S.tab = 'work'; if (S.mode === 'search') S.mode = 'split'; } return render(); }
   if (d.dupex) { await flushSaves(); const x = S.exams.find(v => v.id === d.dupex); if (!x) return; const c = clone(x); c.id = newExam().id; c.title += ' (עותק)'; S.exam = c; S.editing.clear(); saveExamSoon(); toast('נוצר עותק של המבחן'); S.tab = 'work'; return render(); }
   if (d.delex) return deleteExamFlow(d.delex);
+  if (d.renex) return renameExamFlow(d.renex);
   if (d.goto) { expandFor(d.goto); render(); return flashItem(d.goto); }
   if (d.usetoggle) { const q = qByUid(d.usetoggle); const was = !!usedBy(q); setUsed(q.uid, !was); toast(was ? 'הסימון בוטל – השאלה חזרה ל"לא השתמשתי"' : 'השאלה סומנה כמשומשת'); return render(); }
   if (d.cgtoggle) { S.caseOpen.has(d.cgtoggle) ? S.caseOpen.delete(d.cgtoggle) : S.caseOpen.add(d.cgtoggle); return render(); }
@@ -746,6 +779,11 @@ $app.addEventListener('click', async e => {
   if (t.id === 'retrybank') { try { await loadAll(); } catch (err) { logErr('טעינה', err.message); } return render(); }
   if (t.id === 'signout') return signOutFlow();
   if (t.id === 'reset') { S.f = emptyFilters(); return render(); }
+  if (d.unf) { const k = d.unf; if (k === 'text') S.f.text = ''; else if (k === 'use') S.f.use = 'all'; else S.f[k].delete(d.unv); return render(); }
+  if (d.fg) {                                                   // קיפול/פתיחה בלי רינדור מחדש (שומר מיקוד וגלילה)
+    const open = !S.fopen.has(d.fg); open ? S.fopen.add(d.fg) : S.fopen.delete(d.fg); localStorage.setItem('fopen', JSON.stringify([...S.fopen]));
+    t.setAttribute('aria-expanded', open); t.querySelector('.chv').textContent = open ? '▾' : '◂'; const body = document.getElementById('fg-' + d.fg); if (body) body.hidden = !open; t.closest('.fgrp')?.classList.toggle('open', open); return;
+  }
   if (t.id === 'selall') { filtered().forEach(q => S.checked.add(q.uid)); return render(); }
   if (t.id === 'addchecked') { const qs = S.questions.filter(q => S.checked.has(q.uid)); S.checked.clear(); return addToExam(qs); }
   if (d.add) return addToExam([qByUid(d.add)]);
@@ -763,6 +801,7 @@ $app.addEventListener('click', async e => {
   if (d.chlevel) { const c = S.exam.items.find(x => x.id === d.chlevel); c.level = c.level === 2 ? 1 : 2; saveExamSoon(); return render(); }
   if (t.id === 'newq') { const it = { id: uid(), snap: { uid: 'draft-' + uid(), kind: 'draft', year: null, examCode: null, originalNumber: null, typeId: null, domainId: null, originalPoints: null, caseStudyId: null, blocks: [{ type: 'text', text: '' }], rubric: null }, edited: false, points: null, answerLines: 3, pageBreak: false, images: [] }; S.exam.items.push(it); S.editing.add(it.id); saveExamSoon(); return render(); }
   if (d.savepq) { S.pq = itemToDraft(S.exam.items.find(i => i.id === d.savepq)); S.tab = 'personal'; return render(); }
+  if (d.pqsearch !== undefined) { S.f = emptyFilters(); S.f.kinds.add('personal'); S.tab = 'work'; S.mode = 'search'; localStorage.setItem('mode', 'search'); return render(); }
   if (d.pqnew !== undefined) { S.pq = emptyDraft(); return render(); }
   if (d.pqedit) { S.pq = questionToDraft(S.personal.find(q => q.uid === d.pqedit)); return render(); }
   if (d.pqcancel !== undefined) { S.pq = null; return render(); }
@@ -795,22 +834,28 @@ $app.addEventListener('change', async e => {
   if (await admin.change(t, d)) return;
   if (d.pvt !== undefined) { S.pvTeacher = t.checked; return render(); }
   if (t.id === 'files') return importFiles([...t.files], { publish: S.adm.publishOnImport });
+  if (t.id === 'exsort') { S.exSort = t.value; localStorage.setItem('exSort', t.value); return render(); }
   if (t.id === 'sort') { S.sort = t.value; return render(); }
   if (t.id === 'examsel') { await flushSaves(); const x = S.exams.find(v => v.id === t.value); if (x) S.exam = clone(x); S.editing.clear(); S.saveState = null; return render(); }
-  if (d.f) { t.checked ? S.f[d.f].add(t.value) : S.f[d.f].delete(t.value); return render(); }
+  if (d.f) { t.checked ? S.f[d.f].add(t.value) : S.f[d.f].delete(t.value); render(); document.querySelector(`input[data-f="${d.f}"][value="${CSS.escape(t.value)}"]`)?.focus(); return; }
   if (d.chk) { t.checked ? S.checked.add(d.chk) : S.checked.delete(d.chk); return render(); }
   if (d.m) {
     S.exam[d.m] = t.type === 'checkbox' ? t.checked : t.type === 'number' ? Number(t.value) : t.value;
     saveExamSoon(); if (['targetPoints', 'showPoints', 'template'].includes(d.m)) return render(); return;
   }
-  if (d.pts) { const it = S.exam.items.find(i => i.id === d.pts); it.points = t.value === '' ? null : Number(t.value); saveExamSoon(); return render(); }
-  if (d.lines) { S.exam.items.find(i => i.id === d.lines).answerLines = Number(t.value) || 0; saveExamSoon(); return; }
+  if (d.pts) { const it = S.exam.items.find(i => i.id === d.pts); it.points = t.value === '' ? null : Math.min(999, Math.max(0, Math.round(Number(t.value) || 0))); if (it.points != null) t.value = it.points; saveExamSoon(); return; }
+  if (d.lines) { const it = S.exam.items.find(i => i.id === d.lines); it.answerLines = Math.min(20, Math.max(0, Math.round(Number(t.value) || 0))); t.value = it.answerLines; saveExamSoon(); return; }
   if (d.pb) { S.exam.items.find(i => i.id === d.pb).pageBreak = t.checked; saveExamSoon(); return; }
   if (d.pq) { S.pq[d.pq] = t.value; return; }
   if (t.dataset.pqimg !== undefined) {
     const f = t.files[0]; if (!f) return;
     try { const { data, name } = await prepareImage(f); const id = uid(); const key = 'user/' + id; await putUserMedia(key, data); S.pq.images.push({ key, name }); return render(); }
     catch (err) { return toast('העלאת התמונה נכשלה: ' + err.message); }
+  }
+  if (t.dataset.pqpdf !== undefined) {
+    const f = t.files[0]; t.value = ''; if (!f) return;
+    const { pickPdfPage } = await import('./pdf-import.js');
+    return pickPdfPage(f, { onError: m => toast(m), onPick: async img => { try { const key = 'user/' + uid(); await putUserMedia(key, img.data); S.pq.images.push({ key, name: img.name }); render(); } catch (err) { toast('הוספת התמונה נכשלה: ' + err.message); } } });
   }
   if (d.uppdf) {
     const f = t.files[0], itId = d.uppdf; t.value = ''; if (!f) return;
@@ -845,6 +890,8 @@ $app.addEventListener('input', e => {
   if (d.pq) { S.pq[d.pq] = t.value; return; }
   if (d.pql) { const [k, i] = d.pql.split(':'); S.pq[k][+i] = t.value; return; }
   if (d.blk) { const [id, bi] = d.blk.split(':'); const it = S.exam.items.find(i => i.id === id); it.snap.blocks[+bi].text = t.value; if (!it.edited) { it.edited = true; } saveExamSoon(); }
+  if (d.pts) { const it = S.exam.items.find(i => i.id === d.pts); const v = t.value.slice(0, 3); it.points = v === '' ? null : Math.min(999, Number(v) || 0); saveExamSoon(); return; }
+  if (d.lines) { const it = S.exam.items.find(i => i.id === d.lines); it.answerLines = Math.min(20, Number(t.value.slice(0, 2)) || 0); saveExamSoon(); return; }
   if (d.chtitle) { S.exam.items.find(i => i.id === d.chtitle).title = t.value; saveExamSoon(); return; }
   if (d.freetext) { S.exam.items.find(i => i.id === d.freetext).text = t.value; saveExamSoon(); return; }
   if (d.m && t.type !== 'checkbox') { S.exam[d.m] = t.type === 'number' ? Number(t.value) : t.value; saveExamSoon(); }
@@ -980,6 +1027,68 @@ async function exportDoc(mode) {
     toast(absent.length ? `קובץ Word הופק, אבל ${absent.length} תמונות לא נטענו ומסומנות במסמך כ״חסרות״. בדקו חיבור ונסו שוב.` : 'קובץ Word הופק');
   } catch (err) { console.error(err); toast('ההפקה נכשלה: ' + err.message); }
 }
+
+async function renameExamFlow(id) {
+  const x = S.exam.id === id ? S.exam : S.exams.find(v => v.id === id); if (!x) return;
+  const name = await ask({ title: 'שינוי שם המבחן', input: { label: 'שם המבחן', value: x.title || '' }, ok: 'שמירה' });
+  if (name == null || !name.trim() || name.trim() === x.title) return;
+  if (S.exam.id === id) { S.exam.title = name.trim(); saveExamSoon(); toast('שם המבחן עודכן'); return render(); }
+  const c = clone(x); c.title = name.trim(); c.updatedAt = Date.now();
+  try { await store.saveExam(c); } catch (e) { if (e.code === 'sync-pending') reportSync('מבחן', e); else return toast('שינוי השם נכשל: ' + (e.code || e.message)); }
+  try { S.exams = await store.loadExams(); } catch (e) { reportSync('רענון רשימת מבחנים', e); }
+  toast('שם המבחן עודכן'); render();
+}
+
+// ---------- "לראש המבחן": כפתור צף. במסך משולב גוללים רק את פאנל המבחן; אחרת הדף ----------
+const topBtn = document.createElement('button');
+topBtn.id = 'totop'; topBtn.type = 'button'; topBtn.hidden = true; topBtn.setAttribute('aria-label', 'חזרה לראש המבחן'); topBtn.innerHTML = ICON.top.replace('width="24" height="24"', 'width="18" height="18"') + '<span>לראש המבחן</span>';
+document.body.appendChild(topBtn);
+const examScroller = () => { const p = S.tab === 'work' && S.mode === 'split' ? document.querySelector('[data-keep="exam"]') : null; return p && getComputedStyle(p).overflowY === 'auto' && p.scrollHeight > p.clientHeight + 1 ? p : null; };
+function updateTop() {
+  const on = S.tab === 'work' && S.mode !== 'search', sc = examScroller();
+  topBtn.hidden = !(on && ((sc ? sc.scrollTop : window.scrollY) > 600));
+}
+document.addEventListener('scroll', updateTop, true);
+window.addEventListener('resize', updateTop);
+topBtn.addEventListener('click', () => {
+  const sc = examScroller(), behavior = matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+  if (sc) sc.scrollTo({ top: 0, behavior }); else window.scrollTo({ top: 0, behavior });
+  (document.getElementById('examttl') || document.querySelector('.pvbar'))?.focus({ preventScroll: true });
+});
+
+// ---------- תפריט "הוסף תמונה" (נגיש במקלדת: חיצים, Escape, Tab סוגר) ----------
+function closeMenus(focusBtn) {
+  document.querySelectorAll('.addimg .menu:not([hidden])').forEach(m => { m.hidden = true; const b = m.parentElement.querySelector('[data-imgmenu]'); b?.setAttribute('aria-expanded', 'false'); if (focusBtn) b?.focus(); });
+}
+function openMenu(btn) {
+  const m = btn.parentElement.querySelector('.menu'); closeMenus(); m.hidden = false; btn.setAttribute('aria-expanded', 'true');
+  const r = btn.getBoundingClientRect(), w = m.offsetWidth, h = m.offsetHeight;
+  const left = Math.max(8, Math.min(innerWidth - w - 8, r.right - w));            // מיושר לקצה הימני של הכפתור (RTL)
+  m.style.left = left + 'px'; m.style.top = (r.bottom + 4 + h > innerHeight && r.top - h - 4 > 0 ? r.top - h - 4 : r.bottom + 4) + 'px';
+  m.querySelector('[role=menuitem]').focus();
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-imgmenu]');
+  if (b) { e.preventDefault(); return b.getAttribute('aria-expanded') === 'true' ? closeMenus(true) : openMenu(b); }
+  const p = e.target.closest('[data-pick]');
+  if (p) { const box = p.closest('.addimg'); closeMenus(); box.querySelector(p.dataset.pick === 'pdf' ? '[data-uppdf],[data-pqpdf]' : '[data-upimg],[data-pqimg]').click(); return; }
+  const an = e.target.closest('[data-anatomy]');
+  if (an) { closeMenus(); toast('שמרו את האיור במחשב, חזרו לכאן והעלו אותו דרך "הוסף תמונה" ← "תמונה מהמחשב". האיור נשמר יחד עם המבחן.', null, 9000); return; }
+  if (!e.target.closest('.menu')) closeMenus();
+}, true);
+document.addEventListener('keydown', e => {
+  const m = document.querySelector('.addimg .menu:not([hidden])'); if (!m) return;
+  const items = [...m.querySelectorAll('[role=menuitem]')], i = items.indexOf(document.activeElement);
+  if (e.key === 'Escape') { e.preventDefault(); closeMenus(true); }
+  else if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length].focus(); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
+  else if (e.key === 'Home') { e.preventDefault(); items[0].focus(); }
+  else if (e.key === 'End') { e.preventDefault(); items[items.length - 1].focus(); }
+  else if (e.key === 'Tab') closeMenus();
+});
+document.addEventListener('scroll', e => { if (!e.target.closest?.('.menu')) closeMenus(); }, true);
+window.addEventListener('resize', () => closeMenus());
+initHelp();
 
 const admin = createAdmin({ S, store, esc, toast, render, label, srcLabel, blocksHtml, loadAll, devLoad });
 await loadAll();

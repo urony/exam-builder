@@ -49,7 +49,7 @@ await run(`document.querySelector('[data-fg=_panel]').click(); document.querySel
 await run(`const c=document.querySelectorAll('input[data-f=domains]'); if(c[0]) c[0].click(); await new Promise(r=>setTimeout(r,200)); const d=document.querySelectorAll('input[data-f=domains]'); if(d[1]) d[1].click(); await new Promise(r=>setTimeout(r,200)); document.querySelector('[data-fg=types]')?.click();`);
 await shot('filters', { clip: { sel: '.splitL', maxH: 640 }, hl: ['.fchips'] });
 await run(`__app.S.f.domains.clear(); __app.S.fopen.delete('_panel'); __app.S.fopen.delete('types'); __app.render()`);
-await shot('card', { clip: { sel: '.item.cmp' }, hl: ['.item.cmp .ih2 .n3', '.item.cmp .ih2 .n2', '.item.cmp [data-mv^=down]'], pad: 10 });
+await shot('card', { clip: { sel: '.item.cmp' }, hl: ['.item.cmp .ih2 .n3', '.item.cmp .ih2 .n2', '.item.cmp [data-top]', '.item.cmp [data-help=card]'], pad: 10 });
 await run(`document.querySelector('.item.cmp [data-imgmenu]').click()`);
 await shot('menu', { clip: { sel: '.item.cmp .ih2', extraH: 130 }, hl: [], pad: 14 });
 await b.key('Escape');

@@ -1,0 +1,10 @@
+:root { --bg:#fdfcf9; --card:#fff; --ink:#2a2826; --muted:#6a645d; --accent:#b5532b; --accent-soft:#f8ece4; --line:#e8e2d8; --tip:#eaf4e8; --tip-line:#bcd9b8; --tip-ink:#25552d; --warn:#fef3c7; --warn-ink:#7a5200; --font:"Open Sans","Segoe UI",Arial,sans-serif; --head-font:var(--font); }
+body{line-height:1.75}
+h1,h2{font-weight:800;letter-spacing:-.3px}
+h2 .num{background:var(--ink)}
+a{color:#8f3f1e}
+.k{background:#f1ede5;color:var(--ink)}
+.top{background:var(--bg)}
+nav.toc a{text-decoration:none;font-weight:600}
+nav.toc a:hover{text-decoration:underline}
+section.chap{border-radius:14px}

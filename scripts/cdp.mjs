@@ -45,11 +45,11 @@ export async function launch({ port = 9333 + Math.floor(Math.random() * 500) } =
     },
     async waitFor(cond, ms = 15000) { const t = Date.now(); while (Date.now() - t < ms) { try { if (await api.eval(cond)) return true; } catch { /* עדיין */ } await new Promise(r => setTimeout(r, 150)); } throw new Error('timeout waiting for: ' + cond); },
     async shot(file, clip) {
-      const params = { format: 'png' }; if (clip) params.clip = { ...clip, scale: 1 };
+      const params = { format: 'png' }; if (clip) { params.clip = { ...clip, scale: 1 }; params.captureBeyondViewport = true; }
       const r = await send('Page.captureScreenshot', params); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, Buffer.from(r.data, 'base64')); return file;
     },
     async rect(sel) { return api.eval(`(()=>{ const e=document.querySelector(${JSON.stringify(sel)}); if(!e) return null; const r=e.getBoundingClientRect(); return {x:r.left+scrollX,y:r.top+scrollY,width:r.width,height:r.height}; })()`); },
-    async key(key) { for (const type of ['keyDown', 'keyUp']) await send('Input.dispatchKeyEvent', { type, key, code: key, windowsVirtualKeyCode: { Tab: 9, Enter: 13, Escape: 27, ArrowDown: 40, ArrowUp: 38 }[key] || 0 }); },
+    async key(key) { for (const type of ['keyDown', 'keyUp']) await send('Input.dispatchKeyEvent', { type, key, ...(key === 'Enter' && type === 'keyDown' ? { text: String.fromCharCode(13) } : {}), code: key, windowsVirtualKeyCode: { Tab: 9, Enter: 13, Escape: 27, ArrowDown: 40, ArrowUp: 38 }[key] || 0 }); },
     async close() { try { ws.close(); } catch { /* ignore */ } proc.kill(); await new Promise(r => setTimeout(r, 300)); try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* נעול */ } },
   };
   return api;

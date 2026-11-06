@@ -1,3 +1,6 @@
+import '@fontsource/open-sans/latin-400.css'; import '@fontsource/open-sans/latin-600.css'; import '@fontsource/open-sans/latin-700.css'; import '@fontsource/open-sans/latin-800.css';
+import '@fontsource/open-sans/hebrew-400.css'; import '@fontsource/open-sans/hebrew-600.css'; import '@fontsource/open-sans/hebrew-700.css'; import '@fontsource/open-sans/hebrew-800.css';
+import './theme-warm.css';
 import { parsePackage, KIND_LABEL } from './adapter.js';
 import { cellLines } from './clean.js';
 import { store, localStore, setBackend } from './store.js';
@@ -37,7 +40,7 @@ const S = {
   usage: emptyUsage(), saveState: null, exSort: localStorage.getItem('exSort') || 'updated',
   fopen: new Set(JSON.parse(localStorage.getItem('fopen') || '["domains"]')),
   user: null, // { uid, name } אחרי התחברות Google; null = מצב מקומי
-  isAdmin: false, warn: '', sync: null, mediaMissing: new Set(),
+  isAdmin: false, loading: '', warn: '', sync: null, mediaMissing: new Set(),
 };
 const $app = document.getElementById('app');
 // הודעה קצרה; עם action מוצג כפתור פעולה (למשל "עבור למבחן")
@@ -150,9 +153,10 @@ async function signInFlow() {
       onSyncError: e => e.where === 'drive-corrupt' ? (logErr('Drive', 'קובץ פגום: ' + e.file), S.sync = { msg: 'קובץ אחד ב־Google Drive (' + e.file + ') פגום ולא נטען. שאר הנתונים נטענו והקובץ לא נמחק.' }) : (e.where === 'suggestions' || e.where === 'audit') ? reportCentral(e.where, e.error) : reportSync(e.where, e.error),
     }));
     S.user = { uid: u.uid, name: u.name, hasDrive: u.hasDrive }; S.isAdmin = admin; S.sync = null; S.exam = null; S.mediaMissing.clear();
-    try { await loadAll(); toast('מחובר: ' + (u.name || 'משתמש') + (admin ? ' (מנהל)' : '')); }
-    catch (err) { console.error('loadAll after sign-in:', err); reportSync('טעינה', err); S.exam = newExam(); }
-    render();
+    S.loading = 'מכין את מאגר השאלות והמבחנים שלך…'; render();
+    try { await loadAll(); S.loading = ''; toast('מחובר: ' + (u.name || 'משתמש') + (admin ? ' (מנהל)' : '')); }
+    catch (err) { S.loading = ''; console.error('loadAll after sign-in:', err); reportSync('טעינה', err); S.exam = newExam(); }
+    S.loading = ''; render();
   } catch (err) { console.error('sign-in:', err); toast('ההתחברות נכשלה: ' + (err.code || err.message)); }
 }
 async function signOutFlow() {
@@ -339,6 +343,7 @@ function render() {
     <a class="btn sm helpnav" href="${GUIDE_URL}" target="_blank" rel="noopener" title="מדריך שימוש למורים (נפתח בלשונית חדשה)">${ICON.help.replace('width="24" height="24"', 'width="16" height="16"')} עזרה / איך משתמשים?</a>
     ${cloudConfigured() ? (S.user ? `<span class="pill user">${esc(S.user.name || 'מחובר')}</span><button class="btn sm" id="signout">התנתק</button>` : '<button class="btn sm primary" id="signin">התחברות עם Google</button>') : ''}
   </header>
+  ${S.loading ? `<div class="loadbar" role="status" aria-live="polite"><span class="spin" aria-hidden="true"></span>${esc(S.loading)}</div>` : ''}
   ${syncBarHtml()}
   ${!S.user && cloudConfigured() ? '<div class="warnbar">מצב מקומי: המאגר והמבחנים נשמרים בדפדפן הזה בלבד. התחברו עם Google כדי לראות את המאגר המרכזי ולשמור ב-Drive.</div>' : ''}
   <main class="${S.tab === 'work' ? 'm-' + S.mode : ''}" id="main" tabindex="-1">${main}</main>
@@ -346,7 +351,7 @@ function render() {
   ${S.modal && qByUid(S.modal) ? `<div class="modal" data-closemodal><div class="modalbox card" role="dialog" aria-modal="true" aria-label="פרטי שאלה"><button class="btn sm" data-closemodal style="float:inline-end">סגור ✕</button>${detailHtml(qByUid(S.modal))}</div></div>` : ''}`;
   $app.querySelectorAll('[data-keep]').forEach(el => { const v = keep.get(el.dataset.keep); if (v) el.scrollTop = v; });
   if (sameTab) window.scrollTo(0, wy); else window.scrollTo(0, 0);
-  requestAnimationFrame(() => { measurePaper(); measureLayout(); updateTop(); });
+  requestAnimationFrame(() => { measurePaper(); measureLayout(); });
 }
 // גובה אזור העבודה: הפאנלים במצב משולב מותאמים לגובה המסך (גלילה אחת לכל פאנל)
 function measureLayout() { const m = document.querySelector('.split, .bank, .examwrap') || document.getElementById('main'); if (m) document.documentElement.style.setProperty('--maintop', Math.round(m.getBoundingClientRect().top + window.scrollY) + 'px'); }
@@ -355,7 +360,7 @@ function adminView() { return admin.view(); }
 
 function workTools() {
   const modes = [['search', 'חיפוש בלבד'], ['split', 'משולב'], ['exam', 'מבחן בלבד']];
-  return `<div class="worktools"><div class="seg" role="group" aria-label="מצב תצוגה">${modes.map(([k, t]) => `<button data-mode="${k}" class="${S.mode === k ? 'on' : ''}" aria-pressed="${S.mode === k}">${t}</button>`).join('')}</div>
+  return `<div class="worktools"><div class="seg" role="group" aria-label="מצב תצוגה">${modes.map(([k, t]) => `<button data-mode="${k}" class="${S.mode === k ? 'on' : ''}" aria-pressed="${S.mode === k}">${t}</button>`).join('')}</div>${helpBtn('modes')}
     ${S.mode === 'split' ? `<div class="seg sm" role="group" aria-label="יחס רוחב בין המאגר למבחן"><span class="seglbl">רוחב:</span>${Object.entries(SPLITS).map(([k, [t]]) => `<button data-split="${k}" class="${S.split === k ? 'on' : ''}" aria-pressed="${S.split === k}">${t}</button>`).join('')}</div>` : ''}</div>`;
 }
 function workView() {
@@ -453,7 +458,7 @@ function examPanel(compact) {
   if (compact && S.pv === 'both') S.pv = 'edit';
   if (!compact && S.pv === 'edit' && !S._pvTouched) S.pv = 'both';
   const saveText = { saving: 'שומר…', saved: 'נשמר ✓', local: 'נשמר במחשב בלבד – ממתין לענן', failed: 'השמירה נכשלה' }[S.saveState] || '';
-  const bar = `<div class="pvbar"><div class="seg sm" role="group" aria-label="תצוגת המבחן">${pvModes.map(([k, t]) => `<button data-pv="${k}" class="${S.pv === k ? 'on' : ''}" aria-pressed="${S.pv === k}">${t}</button>`).join('')}</div>
+  const bar = `<div class="pvbar"><div class="seg sm" role="group" aria-label="תצוגת המבחן">${pvModes.map(([k, t]) => `<button data-pv="${k}" class="${S.pv === k ? 'on' : ''}" aria-pressed="${S.pv === k}">${t}</button>`).join('')}</div>${helpBtn('pvmodes')}
     ${S.pv !== 'edit' ? `<label class="chk"><input type="checkbox" data-pvt ${S.pvTeacher ? 'checked' : ''}> גרסת מורה (עם תשובות)</label>${helpBtn('teacher')}` : ''}
     <span class="spacer"></span><span id="saveind" class="badge savebadge ${S.saveState || ''}" role="status">${saveText}</span>${helpBtn('cloud')}</div>`;
   if (S.pv === 'preview') return bar + paper();
@@ -545,7 +550,7 @@ function editHtml(compact) {
   return `<div class="card">
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
       <select id="examsel" aria-label="בחירת מבחן">${S.exams.some(x => x.id === e.id) ? '' : `<option value="${e.id}">${esc(e.title)} (לא נשמר)</option>`}${S.exams.map(x => `<option value="${x.id}" ${x.id === e.id ? 'selected' : ''}>${esc(x.title)}</option>`).join('')}</select>
-      <button class="btn sm" id="newexam">מבחן חדש</button><button class="btn sm" id="dupexam">שכפל</button><button class="btn sm danger" id="delexam">מחק מבחן</button>
+      <button class="btn sm" id="newexam">מבחן חדש</button><button class="btn sm" id="dupexam">שכפל</button><button class="btn sm danger" id="delexam">מחק מבחן</button>${helpBtn('settings')}
     </div>
     ${compact ? '<details><summary>פרטי המבחן והגדרות</summary>' : ''}<div class="exam-meta">
       <label>כותרת המבחן<input data-m="title" value="${esc(e.title)}"></label>
@@ -616,7 +621,7 @@ function freeHtml(it, i) {
 }
 const ic = (name, n = 16) => ICON[name].replace('width="24" height="24"', `width="${n}" height="${n}"`);
 const srcShort = q => q.kind === 'personal' ? 'שאלה אישית' : q.kind === 'draft' ? 'שאלה חדשה' : q.kind === 'bagrut' ? 'בגרות' + (q.year ? ' ' + q.year : '') : 'שאלה ממורה';
-const ibtn = (attrs, icon, lbl, cls = '') => `<button type="button" class="ibtn ${cls}" ${attrs} title="${lbl}" aria-label="${lbl}">${ic(icon)}</button>`;
+const ibtn = (attrs, icon, lbl, cls = '') => `<button type="button" class="ibtn ${cls}" ${attrs} data-tip="${lbl}" aria-label="${lbl}">${ic(icon)}</button>`;
 // "הוסף תמונה": תפריט אחד (תמונה מהמחשב / עמוד מ-PDF / כלי האיורים). kind: item | pq; id: מזהה פריט
 function addImageMenu(kind, id = '') {
   const a = kind === 'item' ? { up: `data-upimg="${id}"`, pdf: `data-uppdf="${id}"` } : { up: 'data-pqimg', pdf: 'data-pqpdf' };
@@ -635,8 +640,8 @@ function itemHtml(it, i, first) {
   return `${cid ? `<div class="card casebox"><h4>סיפור מקרה – מוצג פעם אחת לפני שאלה ${qNumber(S.exam, it.id)} <label style="float:inline-end"><input type="checkbox" data-casein="${esc(cid)}" checked> כלול</label></h4>${blocksHtml(S.exam.cases[cid].blocks)}</div>` : ''}
   <div class="card item cmp" data-id="${it.id}">
     <div class="ih1"><span class="drag" draggable="true" data-dragh="${it.id}" title="גרירה לשינוי סדר" aria-hidden="true">${ic('grip', 18)}</span><span class="num">שאלה ${qNumber(S.exam, it.id)}</span>
-      <span class="mvs">${ibtn(`data-mv="up:${it.id}" ${i === 0 ? 'disabled' : ''}`, 'up', 'הזזת השאלה למעלה')}${ibtn(`data-mv="down:${it.id}" ${i === n - 1 ? 'disabled' : ''}`, 'down', 'הזזת השאלה למטה')}</span>
-      <span class="ibadges"><span class="badge src">${esc(srcShort(sn))}</span>${dom ? `<span class="badge">${esc(dom)}</span>` : ''}${sn.rubric ? '<span class="badge ok">מחוון</span>' : ''}</span></div>
+      <span class="mvs">${ibtn(`data-mv="up:${it.id}" ${i === 0 ? 'disabled' : ''}`, 'up', 'הזזת השאלה למעלה')}${ibtn(`data-mv="down:${it.id}" ${i === n - 1 ? 'disabled' : ''}`, 'down', 'הזזת השאלה למטה')}${ibtn('data-top', 'top', 'חזרה לראש המבחן', 'totopbtn')}</span>
+      <span class="ibadges"><span class="badge src">${esc(srcShort(sn))}</span>${dom ? `<span class="badge">${esc(dom)}</span>` : ''}${sn.rubric ? '<span class="badge ok">מחוון</span>' : ''}</span><span class="ihelp">${helpBtn('card')}</span></div>
     <div class="ih2">
       <label class="fld">נק׳ <input class="n3" type="number" min="0" max="999" inputmode="numeric" data-pts="${it.id}" value="${it.points ?? ''}" aria-label="ניקוד השאלה"></label>
       ${isMC ? '' : `<label class="fld">שורות <input class="n2" type="number" min="0" max="20" inputmode="numeric" data-lines="${it.id}" value="${it.answerLines}" aria-label="מספר שורות לתשובה"></label>`}
@@ -769,14 +774,15 @@ $app.addEventListener('click', async e => {
   if (d.dupex) { await flushSaves(); const x = S.exams.find(v => v.id === d.dupex); if (!x) return; const c = clone(x); c.id = newExam().id; c.title += ' (עותק)'; S.exam = c; S.editing.clear(); saveExamSoon(); toast('נוצר עותק של המבחן'); S.tab = 'work'; return render(); }
   if (d.delex) return deleteExamFlow(d.delex);
   if (d.renex) return renameExamFlow(d.renex);
+  if (d.top !== undefined) return scrollExamTop();
   if (d.goto) { expandFor(d.goto); render(); return flashItem(d.goto); }
   if (d.usetoggle) { const q = qByUid(d.usetoggle); const was = !!usedBy(q); setUsed(q.uid, !was); toast(was ? 'הסימון בוטל – השאלה חזרה ל"לא השתמשתי"' : 'השאלה סומנה כמשומשת'); return render(); }
   if (d.cgtoggle) { S.caseOpen.has(d.cgtoggle) ? S.caseOpen.delete(d.cgtoggle) : S.caseOpen.add(d.cgtoggle); return render(); }
-  if (d.cgadd) return addToExam(caseMembers(S.questions, d.cgadd));
+  if (d.cgadd) return withBusy(t, 'מוסיף למבחן…', () => addToExam(caseMembers(S.questions, d.cgadd)));
   if (d.chapbefore) { const at = S.exam.items.findIndex(x => x.id === d.chapbefore); const c = { id: uid(), type: 'chapter', level: 1, title: '', pageBreak: false }; S.exam.items.splice(at, 0, c); saveExamSoon(); render(); setTimeout(() => document.querySelector(`[data-chtitle="${c.id}"]`)?.focus(), 30); return; }
   if (t.id === 'signin') return signInFlow();
   if (t.id === 'retrysync') return retrySync();
-  if (t.id === 'retrybank') { try { await loadAll(); } catch (err) { logErr('טעינה', err.message); } return render(); }
+  if (t.id === 'retrybank') { S.loading = 'טוען את מאגר השאלות…'; render(); try { await loadAll(); } catch (err) { logErr('טעינה', err.message); } S.loading = ''; return render(); }
   if (t.id === 'signout') return signOutFlow();
   if (t.id === 'reset') { S.f = emptyFilters(); return render(); }
   if (d.unf) { const k = d.unf; if (k === 'text') S.f.text = ''; else if (k === 'use') S.f.use = 'all'; else S.f[k].delete(d.unv); return render(); }
@@ -785,8 +791,8 @@ $app.addEventListener('click', async e => {
     t.setAttribute('aria-expanded', open); t.querySelector('.chv').textContent = open ? '▾' : '◂'; const body = document.getElementById('fg-' + d.fg); if (body) body.hidden = !open; t.closest('.fgrp')?.classList.toggle('open', open); return;
   }
   if (t.id === 'selall') { filtered().forEach(q => S.checked.add(q.uid)); return render(); }
-  if (t.id === 'addchecked') { const qs = S.questions.filter(q => S.checked.has(q.uid)); S.checked.clear(); return addToExam(qs); }
-  if (d.add) return addToExam([qByUid(d.add)]);
+  if (t.id === 'addchecked') return withBusy(t, 'מוסיף למבחן…', () => { const qs = S.questions.filter(q => S.checked.has(q.uid)); S.checked.clear(); addToExam(qs); });
+  if (d.add) return withBusy(t, 'מוסיף למבחן…', () => addToExam([qByUid(d.add)]));
   if (d.uid && !e.target.matches('input')) { S.sel = d.uid; if (S.mode === 'split') S.modal = d.uid; return render(); }
   if (d.nudge) { const [a, b, k] = d.nudge.split(':'); const it = S.exam.items.find(i => i.id === a), im = it.images.find(i => i.id === b); const side = im.position === 'side', tmp = { ...im, widthCm: side ? Math.min(im.widthCm, 6.5) : im.widthCm }; nudge(tmp, k, side ? 5.8 : 17); im.dx = tmp.dx; im.dy = tmp.dy; saveExamSoon(); return render(); }
   if (d.rmimg) { const [a, b] = d.rmimg.split(':'); const it = S.exam.items.find(i => i.id === a); it.images = it.images.filter(i => i.id !== b); saveExamSoon(); return render(); }
@@ -899,6 +905,16 @@ $app.addEventListener('input', e => {
 const input = {};
 
 // ---------- פעולות מורכבות ----------
+// חיווי "מוסיף…" על הכפתור עד שהפעולה הסתיימה (בלי עיכוב מלאכותי: רק מחכים לציור של פריים). מונע לחיצה כפולה.
+let busy = false;
+async function withBusy(btn, text, fn) {
+  if (busy) return; busy = true;
+  const old = btn.textContent; btn.disabled = true; btn.textContent = text; btn.setAttribute('aria-busy', 'true');
+  await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+  try { fn(); }
+  catch (e) { console.error(e); toast('ההוספה למבחן נכשלה: ' + (e.message || e)); }
+  finally { busy = false; if (btn.isConnected) { btn.disabled = false; btn.textContent = old; btn.removeAttribute('aria-busy'); } }
+}
 async function newExamFlow() {
   await flushSaves(); S.exam = newExam(); S.editing.clear(); S.saveState = null;    // מבחן חדש נשמר רק אחרי שינוי ראשון (לא נוצרים מבחנים ריקים)
   S.tab = 'work'; S.mode = 'split'; localStorage.setItem('mode', 'split');         // מבחן חדש: תמיד במצב משולב (מאגר + מבחן)
@@ -1039,22 +1055,13 @@ async function renameExamFlow(id) {
   toast('שם המבחן עודכן'); render();
 }
 
-// ---------- "לראש המבחן": כפתור צף. במסך משולב גוללים רק את פאנל המבחן; אחרת הדף ----------
-const topBtn = document.createElement('button');
-topBtn.id = 'totop'; topBtn.type = 'button'; topBtn.hidden = true; topBtn.setAttribute('aria-label', 'חזרה לראש המבחן'); topBtn.innerHTML = ICON.top.replace('width="24" height="24"', 'width="18" height="18"') + '<span>לראש המבחן</span>';
-document.body.appendChild(topBtn);
+// ---------- "לראש המבחן": חץ בכל כרטיסיית שאלה. במסך משולב גוללים רק את פאנל המבחן; אחרת את הדף ----------
 const examScroller = () => { const p = S.tab === 'work' && S.mode === 'split' ? document.querySelector('[data-keep="exam"]') : null; return p && getComputedStyle(p).overflowY === 'auto' && p.scrollHeight > p.clientHeight + 1 ? p : null; };
-function updateTop() {
-  const on = S.tab === 'work' && S.mode !== 'search', sc = examScroller();
-  topBtn.hidden = !(on && ((sc ? sc.scrollTop : window.scrollY) > 600));
-}
-document.addEventListener('scroll', updateTop, true);
-window.addEventListener('resize', updateTop);
-topBtn.addEventListener('click', () => {
+function scrollExamTop() {
   const sc = examScroller(), behavior = matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
   if (sc) sc.scrollTo({ top: 0, behavior }); else window.scrollTo({ top: 0, behavior });
-  (document.getElementById('examttl') || document.querySelector('.pvbar'))?.focus({ preventScroll: true });
-});
+  (document.getElementById('examttl') || document.getElementById('examsel'))?.focus({ preventScroll: true });
+}
 
 // ---------- תפריט "הוסף תמונה" (נגיש במקלדת: חיצים, Escape, Tab סוגר) ----------
 function closeMenus(focusBtn) {

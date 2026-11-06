@@ -3,7 +3,17 @@
 import fs from 'node:fs';
 const dir = process.argv[2] || 'out/guide-img';
 let html = fs.readFileSync('docs/guide/guide.src.html', 'utf8');
-if (fs.existsSync('docs/guide/theme.css')) html = html.replace('/*GUIDE_THEME*/', fs.readFileSync('docs/guide/theme.css', 'utf8'));
+// גופן Open Sans משובץ (קובץ עצמאי, בלי טעינה משירות חיצוני)
+let fonts = '';
+for (const sub of ['latin', 'hebrew']) for (const w of [400, 600, 700, 800]) {
+  const css = fs.readFileSync(`node_modules/@fontsource/open-sans/${sub}-${w}.css`, 'utf8');
+  const ur = /unicode-range:([^;]+);/.exec(css)?.[1] || '';
+  const data = fs.readFileSync(`node_modules/@fontsource/open-sans/files/open-sans-${sub}-${w}-normal.woff2`).toString('base64');
+  fonts += `@font-face{font-family:"Open Sans";font-weight:${w};font-style:normal;font-display:swap;src:url(data:font/woff2;base64,${data}) format("woff2");unicode-range:${ur}}
+`;
+}
+if (fs.existsSync('docs/guide/theme.css')) html = html.replace('/*GUIDE_THEME*/', fonts + '/*THEME*/');
+if (fs.existsSync('docs/guide/theme.css')) html = html.replace('</style>', () => fs.readFileSync('docs/guide/theme.css', 'utf8') + '</style>');
 const miss = [];
 html = html.replace(/<img data-shot="([\w-]+)"/g, (m, name) => {
   const f = `${dir}/${name}.jpg`; if (!fs.existsSync(f)) { miss.push(name); return m; }

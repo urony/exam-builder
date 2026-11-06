@@ -13,7 +13,7 @@ try {
   // ---- מבחן: שאלות מגוונות ----
   await b.run(`const A=__app; A.S.tab='work'; A.S.mode='split'; A.render(); await new Promise(r=>setTimeout(r,200));
     const S=A.S, pick=[...S.questions.filter(q=>q.blocks.some(x=>x.type==='table')).slice(0,2), ...S.questions.filter(q=>q.caseStudyId).slice(0,3), ...S.questions.filter(q=>q.blocks.some(x=>x.type==='image'&&!x.reference)).slice(0,2), ...S.questions.filter(q=>q.blocks.filter(x=>x.type==='section').length>=4).slice(0,2), ...S.questions.filter(q=>q.blocks.some(x=>x.type==='choice')).slice(0,2), ...S.questions.filter(q=>q.rubric?.answer?.some(x=>x.type==='image')).slice(0,1), ...S.questions.filter(q=>/[A-Za-z]{4}/.test(q.searchText)).slice(0,2)];
-    const seen=new Set(); for(const q of pick){ if(seen.has(q.uid)) continue; seen.add(q.uid); document.querySelector('[data-add="'+CSS.escape(q.uid)+'"]')?.click(); await new Promise(r=>setTimeout(r,120)); } let k=0; for(const q of S.questions.filter(x=>x.kind==='bagrut')){ if(seen.size>=14) break; if(seen.has(q.uid)) continue; seen.add(q.uid); document.querySelector('[data-add="'+CSS.escape(q.uid)+'"]')?.click(); await new Promise(r=>setTimeout(r,100)); } return seen.size`);
+    const seen=new Set(); for(const q of pick){ if(seen.has(q.uid)) continue; seen.add(q.uid); document.querySelector('[data-add="'+CSS.escape(q.uid)+'"]')?.click(); await new Promise(r=>setTimeout(r,300)); } let k=0; for(const q of S.questions.filter(x=>x.kind==='bagrut')){ if(seen.size>=14) break; if(seen.has(q.uid)) continue; seen.add(q.uid); document.querySelector('[data-add="'+CSS.escape(q.uid)+'"]')?.click(); await new Promise(r=>setTimeout(r,300)); } return seen.size`);
   const n = await b.eval('document.querySelectorAll(".item").length'); ok(n >= 6, `מבחן נבנה (${n} שאלות)`);
   // ---- מבנה כרטיסייה ----
   const card = await b.eval(`(()=>{ const c=document.querySelector('.item.cmp'); return { h:c.getBoundingClientRect().height, snip:!!c.querySelector('.qsnip'), btnsImg:c.querySelectorAll('.addimg').length, pts:!!c.querySelector('input.n3'), up:c.querySelector('[data-mv^=up]').disabled, num:c.querySelector('.num').textContent }; })()`);
@@ -52,14 +52,19 @@ try {
   await click('.fchip'); ok(await b.eval(`__app.S.f.domains.size===1`), 'הסרת שבב בודד');
   await click('#reset'); ok(await b.eval(`__app.S.f.domains.size===0 && !document.querySelector('.fchip')`), 'איפוס מסננים');
   ok(await b.eval(`!!document.querySelector('.useseg')`), 'סינון "שימוש קודם" קיים');
-  // ---- לראש המבחן ----
-  const sc = '[data-keep=exam]';
-  await b.run(`document.querySelector('[data-keep=exam]').scrollTop=0; await new Promise(r=>setTimeout(r,250));`); ok(await b.eval(`document.getElementById('totop').hidden`), 'כפתור "לראש המבחן" מוסתר בראש');
-  await b.run(`const p=document.querySelector('${sc}'); p.scrollTop=1500; await new Promise(r=>setTimeout(r,250));`);
-  ok(await b.eval(`!document.getElementById('totop').hidden`), 'מופיע אחרי גלילה');
-  const bankTop = await b.eval(`document.querySelector('[data-keep=bank]').scrollTop`), winY = await b.eval('scrollY');
-  await click('#totop'); await sleep(900);
-  ok(await b.eval(`document.querySelector('${sc}').scrollTop===0 && scrollY===${winY} && document.querySelector('[data-keep=bank]').scrollTop===${bankTop}`), 'חזרה לראש פאנל המבחן בלבד (המאגר והדף לא זזו)');
+  // ---- חץ לראש המבחן בכרטיסיית שאלה ----
+  ok(await b.eval('!document.getElementById("totop") && document.querySelectorAll(".item.cmp [data-top]").length === document.querySelectorAll(".item.cmp").length'), 'חץ "לראש המבחן" בכל כרטיסיית שאלה, בלי כפתור צף');
+  const bankTop = await b.eval('document.querySelector("[data-keep=bank]").scrollTop'), winY = await b.eval('scrollY');
+  await b.run('const c=[...document.querySelectorAll(".item.cmp")]; document.querySelector("[data-keep=exam]").scrollTop = c[c.length-1].offsetTop; await new Promise(r=>setTimeout(r,250));');
+  ok(await b.eval('document.querySelector("[data-keep=exam]").scrollTop > 500'), 'גלילה לסוף המבחן');
+  await b.run('const c=[...document.querySelectorAll(".item.cmp")]; c[c.length-1].querySelector("[data-top]").focus();');
+  await b.key('Enter'); await b.waitFor('document.querySelector("[data-keep=exam]").scrollTop === 0', 4000).catch(() => {});
+  ok(await b.eval('document.querySelector("[data-keep=exam]").scrollTop === 0 && scrollY === ' + winY + ' && document.querySelector("[data-keep=bank]").scrollTop === ' + bankTop), 'מקלדת: חזרה לראש פאנל המבחן בלבד (המאגר והדף לא זזו)');
+  // אחרי קפיצה דרך הניווט
+  await b.run('document.querySelectorAll("[data-goto]")[8]?.click();'); await b.waitFor('document.querySelector("[data-keep=exam]").scrollTop > 300', 5000).catch(() => {}); await sleep(1500);
+  ok(await b.eval('document.querySelector("[data-keep=exam]").scrollTop > 300'), 'קפיצה לשאלה 8 דרך הניווט');
+  await b.run('const c=[...document.querySelectorAll(".item.cmp")]; c[7].querySelector("[data-top]").click();');
+  await b.waitFor('document.querySelector("[data-keep=exam]").scrollTop === 0', 4000).catch(() => {}); ok(await b.eval('document.querySelector("[data-keep=exam]").scrollTop === 0'), 'חזרה לראש אחרי קפיצה דרך הניווט');
   // ---- מאגר אישי ----
   await click('[data-tab=personal]');
   ok(await b.eval(`document.body.innerText.includes('כדי למצוא אותן, עבור לחיפוש השאלות')`), 'הודעת מאגר אישי מוצגת');
@@ -75,6 +80,8 @@ try {
   await click('[data-tab=work]'); await b.run(`__app.S.mode='split'; __app.render();`);
   await click('.helpbtn[data-help=used]'); ok(await b.eval(`!!document.querySelector('.helppop')`), 'חלונית עזרה נפתחת');
   await b.key('Escape'); ok(await b.eval(`!document.querySelector('.helppop')`), 'Escape סוגר עזרה');
+  for (const k of ['modes', 'pvmodes', 'card', 'settings']) { await click('.helpbtn[data-help=' + k + ']'); ok(await b.eval(`!!document.querySelector('.helppop') && document.querySelector('.helppop').getBoundingClientRect().right <= innerWidth && document.querySelector('.helppop').getBoundingClientRect().left >= 0`), 'חלונית עזרה: ' + k); await b.key('Escape'); }
+  await click('[data-mode=exam]'); ok(await b.eval(`!!document.querySelector('.helpbtn[data-help=pvmodes]')`), 'עזרה למצבי תצוגה'); await click('[data-mode=split]');
   // ---- רוחבים ----
   await b.run(`const A=__app; A.S.tab='work'; A.S.mode='split'; A.S.pv='edit'; A.render();`);
   for (const w of [1366, 1024, 800, 375]) {

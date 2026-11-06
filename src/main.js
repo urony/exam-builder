@@ -74,6 +74,7 @@ async function loadAll() {
   S.exams = await store.loadExams();
   S.personal = await store.loadPersonal();
   S.suggestions = await store.loadSuggestions();
+  if (S.isAdmin && store.reconcileQuotas) store.reconcileQuotas().catch(e => logErr('מכסות הגשה', `${e?.code || ''} ${e?.message || e}`));   // יישור מוני המכסות (מנהל בלבד)
   S.questions = bank.questions.concat(S.personal);
   S.tax = { types: {}, domains: {} };
   for (const p of S.packages) { Object.assign(S.tax.types, p.taxonomy?.types || {}); Object.assign(S.tax.domains, p.taxonomy?.domains || {}); }
@@ -190,7 +191,14 @@ async function runSave(id) {
     else { S.saveState = 'failed'; if (i2()) i2().textContent = 'השמירה נכשלה'; toast('השמירה נכשלה: ' + (e.code || e.message)); console.error(e); }
     return;
   }
-  try { S.exams = await store.loadExams(); syncUsage(); } catch (e) { reportSync('רענון רשימת מבחנים', e); }   // כשל ברענון הרשימה אינו כשל שמירה
+  try { S.exams = await store.loadExams(); syncUsage(); refreshBank(); } catch (e) { reportSync('רענון רשימת מבחנים', e); }   // כשל ברענון הרשימה אינו כשל שמירה
+}
+// אחרי שמירה: סימוני "השתמשת" ו"טרם נשמר" מתעדכנים ברשימת המאגר (בלי רענון מלא, כדי לא לאבד מיקום או מיקוד)
+function refreshBank() {
+  if (S.tab !== 'work' || S.mode === 'exam') return;
+  const box = document.querySelector('.clist') || document.querySelector('[data-keep="banklist"]'); if (!box) return;
+  const list = filtered(); box.innerHTML = bankRows(list, S.mode === 'search' ? 400 : 300);
+  const c = document.querySelector('.listhead b'); if (c) c.textContent = `${list.length} שאלות`;
 }
 const flushSaves = () => Promise.all([...saveTimers.keys()].map(runSave));
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') { flushSaves(); flushUsage(); } });
@@ -318,14 +326,12 @@ function render() {
   const keep = new Map(); $app.querySelectorAll('[data-keep]').forEach(el => keep.set(el.dataset.keep, el.scrollTop));
   const wy = window.scrollY, sameTab = render.tab === S.tab; render.tab = S.tab;
   const e = S.exam;
-  const modes = [['search', 'חיפוש'], ['split', 'משולב'], ['exam', 'מבחן']];
   const tabs = TABS.concat(showAdmin ? [['admin', S.user ? 'ניהול' : 'ניהול (מקומי)']] : []);
   const main = S.tab === 'home' ? homeHtml(S, { showAdmin, cloud: cloudConfigured() }) : S.tab === 'exams' ? examsHtml(S) : S.tab === 'work' ? workView() : S.tab === 'personal' ? personalView() : adminView();
   $app.innerHTML = `
   <header class="top">
     <h1><button class="brand" data-tab="home" aria-label="בונה מבחנים במדעי הבריאות – לדף הבית">בונה מבחנים <small>מדעי הבריאות</small></button></h1>
     <nav class="tabs" aria-label="ניווט ראשי">${tabs.map(([k, t]) => `<button data-tab="${k}" class="${S.tab === k ? 'on' : ''}" ${S.tab === k ? 'aria-current="page"' : ''}>${t}</button>`).join('')}</nav>
-    ${S.tab === 'work' ? `<div class="seg" role="group" aria-label="מצב תצוגה">${modes.map(([k, t]) => `<button data-mode="${k}" class="${S.mode === k ? 'on' : ''}" aria-pressed="${S.mode === k}">${t}</button>`).join('')}</div>` : ''}
     <span class="spacer"></span>
     ${cloudConfigured() ? (S.user ? `<span class="pill user">${esc(S.user.name || 'מחובר')}</span><button class="btn sm" id="signout">התנתק</button>` : '<button class="btn sm primary" id="signin">התחברות עם Google</button>') : ''}
   </header>
@@ -339,16 +345,21 @@ function render() {
   requestAnimationFrame(() => { measurePaper(); measureLayout(); });
 }
 // גובה אזור העבודה: הפאנלים במצב משולב מותאמים לגובה המסך (גלילה אחת לכל פאנל)
-function measureLayout() { const m = document.getElementById('main'); if (m) document.documentElement.style.setProperty('--maintop', Math.round(m.getBoundingClientRect().top + window.scrollY) + 'px'); }
+function measureLayout() { const m = document.querySelector('.split, .bank, .examwrap') || document.getElementById('main'); if (m) document.documentElement.style.setProperty('--maintop', Math.round(m.getBoundingClientRect().top + window.scrollY) + 'px'); }
 window.addEventListener('resize', measureLayout);
 function adminView() { return admin.view(); }
 
+function workTools() {
+  const modes = [['search', 'חיפוש בלבד'], ['split', 'משולב'], ['exam', 'מבחן בלבד']];
+  return `<div class="worktools"><div class="seg" role="group" aria-label="מצב תצוגה">${modes.map(([k, t]) => `<button data-mode="${k}" class="${S.mode === k ? 'on' : ''}" aria-pressed="${S.mode === k}">${t}</button>`).join('')}</div>
+    ${S.mode === 'split' ? `<div class="seg sm" role="group" aria-label="יחס רוחב בין המאגר למבחן"><span class="seglbl">רוחב:</span>${Object.entries(SPLITS).map(([k, [t]]) => `<button data-split="${k}" class="${S.split === k ? 'on' : ''}" aria-pressed="${S.split === k}">${t}</button>`).join('')}</div>` : ''}</div>`;
+}
 function workView() {
-  if (S.mode === 'search') return bankView();
-  if (S.mode === 'exam') return `<div class="examwrap">${examPanel(false)}</div>`;
+  if (S.mode === 'search') return workTools() + bankView();
+  if (S.mode === 'exam') return `${workTools()}<div class="examwrap">${examPanel(false)}</div>`;
   const [, cols] = SPLITS[S.split];
-  return `<div class="split" style="--cols:${cols}"><section class="splitL panel" data-keep="bank" aria-labelledby="bankttl"><h2 class="panelttl" id="bankttl">מאגר השאלות</h2>${bankCompact()}</section>
-    <section class="splitR panel" data-keep="exam" aria-labelledby="examttl"><h2 class="panelttl" id="examttl">המבחן שלי<span class="spacer"></span><span class="seg sm splitseg" role="group" aria-label="יחס רוחב בין המאגר למבחן">${Object.entries(SPLITS).map(([k, [t]]) => `<button data-split="${k}" class="${S.split === k ? 'on' : ''}" aria-pressed="${S.split === k}">${t}</button>`).join('')}</span></h2>${examPanel(true)}</section></div>`;
+  return `${workTools()}<div class="split" style="--cols:${cols}"><section class="splitL panel" data-keep="bank" aria-labelledby="bankttl"><h2 class="panelttl" id="bankttl">מאגר השאלות</h2>${bankCompact()}</section>
+    <section class="splitR panel" data-keep="exam" aria-labelledby="examttl"><h2 class="panelttl" id="examttl">המבחן שלי</h2>${examPanel(true)}</section></div>`;
 }
 
 // ----- מאגר: שורות, קבוצות מקרה, סינון שימוש -----
@@ -360,14 +371,14 @@ function useSeg() {
 }
 function stateBadges(q, ec) {
   const u = usedBy(q), inEx = ec.get(q.uid) || 0;
-  return (inEx ? '<span class="badge inx">במבחן הנוכחי</span>' : '') + (u ? `<span class="badge used" title="${u === 'manual' ? 'סימנת ידנית' : 'מופיעה במבחן שמור'}">השתמשת בה${u === 'manual' ? ' (סימון ידני)' : ''}</span>` : '');
+  return (inEx ? `<span class="badge inx">במבחן הנוכחי${!u && !savedSet().has(q.uid) ? ' · טרם נשמר' : ''}</span>` : '') + (u ? `<span class="badge used" title="${u === 'manual' ? 'סימנת ידנית' : 'מופיעה במבחן שמור'}">השתמשת בה${u === 'manual' ? ' (סימון ידני)' : ''}</span>` : '');
 }
 function qRow(q, ec, inCase = false) {
   const inEx = ec.get(q.uid) || 0, used = usedBy(q);
   const sec = [q.rubric ? 'מחוון' : '', q.blocks.some(b => b.type === 'table') ? 'טבלה' : '', q.blocks.some(b => b.type === 'image' && !b.reference) ? 'תמונה' : '', q.caseStudyId && !inCase ? 'סיפור מקרה' : ''].filter(Boolean);
   return `<div class="qrow ${S.sel === q.uid ? 'sel' : ''} ${inEx ? 'inexam' : ''} ${inCase ? 'incase' : ''}" data-uid="${esc(q.uid)}">
     <input type="checkbox" data-chk="${esc(q.uid)}" ${S.checked.has(q.uid) ? 'checked' : ''} aria-label="בחירת השאלה">
-    <div class="grow"><div class="t" dir="auto">${esc(titleOf(q))}</div>
+    <div class="grow"><div class="t"><button class="qopen" data-uid="${esc(q.uid)}" dir="auto" aria-label="פתיחת פרטי השאלה: ${esc(titleOf(q).slice(0, 60))}">${esc(titleOf(q))}</button></div>
       <div class="s">${esc(label('domains', q.domainId))}${q.typeId ? ' · ' + esc(label('types', q.typeId)) : ''} · ${esc(srcLabel(q))}${q.kind === 'bagrut' && q.originalNumber ? ' · שאלה ' + esc(q.originalNumber) : ''}</div>
       <div class="tags">${stateBadges(q, ec)}${sec.map(x => `<span class="tag">${x}</span>`).join('')}</div></div>
     <div class="acts"><button class="btn sm ${inEx ? '' : 'primary'}" data-add="${esc(q.uid)}" aria-label="${inEx ? 'השאלה כבר במבחן – הצג אותה' : 'הוספת השאלה למבחן'}">${inEx ? '✓ במבחן' : '+ הוסף'}</button>
@@ -515,7 +526,7 @@ function editHtml(compact) {
   const e = S.exam; const tot = totalPoints(e); const diff = tot - e.targetPoints; const first = caseFirstUse(e);
   return `<div class="card">
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
-      <select id="examsel">${S.exams.some(x => x.id === e.id) ? '' : `<option value="${e.id}">${esc(e.title)} (לא נשמר)</option>`}${S.exams.map(x => `<option value="${x.id}" ${x.id === e.id ? 'selected' : ''}>${esc(x.title)}</option>`).join('')}</select>
+      <select id="examsel" aria-label="בחירת מבחן">${S.exams.some(x => x.id === e.id) ? '' : `<option value="${e.id}">${esc(e.title)} (לא נשמר)</option>`}${S.exams.map(x => `<option value="${x.id}" ${x.id === e.id ? 'selected' : ''}>${esc(x.title)}</option>`).join('')}</select>
       <button class="btn sm" id="newexam">מבחן חדש</button><button class="btn sm" id="dupexam">שכפל</button><button class="btn sm danger" id="delexam">מחק מבחן</button>
     </div>
     ${compact ? '<details><summary>פרטי המבחן והגדרות</summary>' : ''}<div class="exam-meta">

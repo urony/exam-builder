@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { savedUids, isUsed, usedSource, setManual, reconcile, mergeUsage, emptyUsage, normalizeUsage } from '../src/usage.js';
 import { createCloudStore } from '../src/cloud-store.js';
 import { createMemStore } from '../src/outbox.js';
+import { LIMITS, checkQuota, quotaUsage, ADMIN_CONTACT, QUOTA_NOTE } from '../src/quota.js';
 import { memDrive, localStub } from './helpers.mjs';
 
 let n = 0; const t = (ok, msg) => { assert.ok(ok, msg); n++; };
@@ -61,6 +62,15 @@ dA.files.set('usage.json', '{bad json');
 const A3 = createCloudStore({ drive: dA, firestore: async () => { throw 1; }, uid: 'A', local: localStub(), outbox: createMemStore(), mediaCache: null, onSyncError: e => (err = e) });
 err = null; t(Object.keys((await A3.loadUsage()).m).length === 0 && err?.where === 'drive-corrupt', 'קובץ שימוש פגום: לא מפיל את הטעינה, מדווח');
 
+// --- בדיקה מקדימה של מכסות בדפדפן (האכיפה האמיתית נבדקת בכללי Firestore) ---
+const pend = (k, img = 0) => Array.from({ length: k }, () => ({ status: 'pending', imageKeys: img ? ['a'] : [] }));
+t(checkQuota([], { imageKeys: ['a', 'b', 'c'] }) === null, 'עד 3 תמונות: מותר');
+t(checkQuota([], { imageKeys: ['a', 'b', 'c', 'd'] })?.code === 'quota-images-per', 'יותר מ-3 תמונות בהצעה: נחסם עם הסבר');
+t(checkQuota(pend(50), {})?.code === 'quota-pending' && checkQuota(pend(49), {}) === null, 'מכסת 50 הצעות ממתינות');
+t(checkQuota([...pend(10), { status: 'approved', imageKeys: ['x', 'y'] }, { status: 'rejected' }], {}) === null && quotaUsage([...pend(10), { status: 'approved', imageKeys: ['x'] }]).pending === 10, 'הצעות שאושרו או נדחו אינן נספרות');
+t(checkQuota(pend(29, 1), { imageKeys: ['a', 'b'] })?.code === 'quota-images' && checkQuota(pend(27, 1), { imageKeys: ['a', 'b', 'c'] }) === null, 'מכסת 30 תמונות בהצעות ממתינות');
+t(checkQuota([], { imageKeys: ['a'], imageSizes: [LIMITS.imageBytes + 1] })?.code === 'quota-image-size' && checkQuota([], { imageKeys: ['a'], imageSizes: [LIMITS.imageBytes] }) === null, 'תמונה מעל 2MB נחסמת, בדיוק 2MB מותרת');
+t(ADMIN_CONTACT === 'urony@hotmail.com' && QUOTA_NOTE.includes('50'), 'נוסח המכסה וכתובת המנהל');
 // --- ביצועים: אלפי שאלות ---
 const big = Array.from({ length: 40 }, (_, i) => ex('b' + i, ...Array.from({ length: 150 }, (_, k) => 'p:q' + (i * 100 + k))));
 const t0 = performance.now(); const sv = savedUids(big); let c = 0; for (let i = 0; i < 20000; i++) if (isUsed(um, sv, 'p:q' + i)) c++;

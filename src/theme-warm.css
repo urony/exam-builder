@@ -70,3 +70,4 @@ nav.tabs button.on { background:transparent; color:var(--ink); font-weight:700; 
 .warnbar { background:#fff7e0; border-color:#f1d78a; color:#7a5200; }
 .qbody { line-height:1.75; }
 
+footer.credit a { color: inherit; text-decoration: underline; text-underline-offset: 3px; } footer.credit a:hover { color: var(--accent-2); }

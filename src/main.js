@@ -347,7 +347,7 @@ function render() {
   ${syncBarHtml()}
   ${!S.user && cloudConfigured() ? '<div class="warnbar">מצב מקומי: המאגר והמבחנים נשמרים בדפדפן הזה בלבד. התחברו עם Google כדי לראות את המאגר המרכזי ולשמור ב-Drive.</div>' : ''}
   <main class="${S.tab === 'work' ? 'm-' + S.mode : ''}" id="main" tabindex="-1">${main}</main>
-  <footer class="credit">פותח על ידי אורי העליון</footer>
+  <footer class="credit">פותח על ידי אורי העליון · <a href="./privacy.html">מדיניות פרטיות</a></footer>
   ${S.modal && qByUid(S.modal) ? `<div class="modal" data-closemodal><div class="modalbox card" role="dialog" aria-modal="true" aria-label="פרטי שאלה"><button class="btn sm" data-closemodal style="float:inline-end">סגור ✕</button>${detailHtml(qByUid(S.modal))}</div></div>` : ''}`;
   $app.querySelectorAll('[data-keep]').forEach(el => { const v = keep.get(el.dataset.keep); if (v) el.scrollTop = v; });
   if (sameTab) window.scrollTo(0, wy); else window.scrollTo(0, 0);

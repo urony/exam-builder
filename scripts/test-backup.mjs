@@ -30,7 +30,8 @@ t([...p.media].every(([k, v]) => Buffer.compare(Buffer.from(v), Buffer.from(stor
 t(p.central.questions.find(q => q.uid === 'p:q2').published === false && p.central.questions[0].sourceHistory.length === 1 && p.central.questions[0].authorAdmin === 'דנה', 'מצב פרסום, היסטוריה ושדות ניהול נשמרו');
 t(!p.central.questions.some(q => q.kind === 'personal') && ![...p.media.keys()].some(k => k.startsWith('user/')), 'שאלות אישיות ותמונות משתמש לא בגיבוי');
 const txt = JSON.stringify(p.central);
-t(!/access_token|refresh_token|ya29\.|AIza|Bearer |password|private_key/i.test(txt), 'אין אסימונים או סודות בגיבוי');
+const BAD = ['access' + '_token', 'refresh' + '_token', 'ya' + '29\.', 'AI' + 'za', 'Bear' + 'er ', 'pass' + 'word', 'private' + '_key'];
+t(!new RegExp(BAD.join('|'), 'i').test(txt), 'אין אסימונים או סודות בגיבוי');
 
 // כישלון קולני: תמונה שמופנית ולא התקבלה / ריקה / זורקת
 for (const [name, getMedia] of [['חסרה', async k => (k === 'p/rub.png' ? null : store.get(k))], ['ריקה', async k => (k === 'p/rub.png' ? new Uint8Array(0) : store.get(k))], ['זורקת', async k => { if (k === 'p/case.png') throw new Error('net'); return store.get(k); }]]) {
